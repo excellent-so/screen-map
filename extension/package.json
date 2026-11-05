@@ -1,0 +1,79 @@
+{
+  "name": "screen-map-vscode",
+  "displayName": "Screen Map",
+  "description": "The map of your running app, in your editor. Screenshot every route, graph how they connect, find the screens your nav forgot.",
+  "version": "0.1.0",
+  "publisher": "excellent",
+  "license": "MIT",
+  "icon": "icon.png",
+  "homepage": "https://github.com/excellent-so/screen-map",
+  "bugs": {
+    "url": "https://github.com/excellent-so/screen-map/issues"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "nextjs",
+    "routes",
+    "screenshots",
+    "sitemap",
+    "navigation",
+    "ux"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/excellent-so/screen-map.git",
+    "directory": "extension"
+  },
+  "main": "./src/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "screenMap.open",
+        "title": "Screen Map: Build & Open Viewer"
+      },
+      {
+        "command": "screenMap.build",
+        "title": "Screen Map: Build"
+      },
+      {
+        "command": "screenMap.serve",
+        "title": "Screen Map: Open Viewer (no rebuild)"
+      },
+      {
+        "command": "screenMap.doctor",
+        "title": "Screen Map: Doctor"
+      }
+    ],
+    "configuration": {
+      "title": "Screen Map",
+      "properties": {
+        "screenMap.command": {
+          "type": "string",
+          "default": "npx --yes @excellent-so/screen-map",
+          "description": "How to invoke the screen-map CLI. Install @excellent-so/screen-map as a devDependency and set this to \"screen-map\" for a faster inner loop."
+        },
+        "screenMap.port": {
+          "type": "number",
+          "default": 4699,
+          "description": "Port for the local viewer server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "package": "vsce package",
+    "publish:vscode": "vsce publish",
+    "publish:openvsx": "ovsx publish"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.0.0",
+    "ovsx": "^0.9.0"
+  }
+}

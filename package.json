@@ -1,0 +1,59 @@
+{
+  "name": "@excellent-so/screen-map",
+  "version": "0.2.4",
+  "description": "The map of your running app. One command screenshots every route, graphs how they connect, and finds the screens your nav forgot.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Excellent",
+  "homepage": "https://github.com/excellent-so/screen-map",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/excellent-so/screen-map.git"
+  },
+  "keywords": [
+    "nextjs",
+    "app-router",
+    "screenshots",
+    "sitemap",
+    "navigation-graph",
+    "ux",
+    "audit",
+    "dev-tools",
+    "storybook",
+    "visual-regression"
+  ],
+  "bin": {
+    "screen-map": "bin/screen-map.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "viewer/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "screen-map": "node bin/screen-map.mjs",
+    "test": "node test/run.mjs",
+    "test:standalone": "node scripts/test-standalone.mjs",
+    "styleguide": "node scripts/sync-styleguide.mjs"
+  },
+  "//dependencies": "Zero runtime dependencies by design. The on-demand Chrome download (`build --download-chrome`) lazy-requires the OPTIONAL `@puppeteer/browsers`; install it yourself only if you want that fallback \u2014 the system-Chrome fast path needs nothing.",
+  "peerDependencies": {
+    "@puppeteer/browsers": "^2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@puppeteer/browsers": {
+      "optional": true
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bugs": {
+    "url": "https://github.com/excellent-so/screen-map/issues"
+  }
+}
