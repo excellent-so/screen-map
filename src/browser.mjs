@@ -52,7 +52,7 @@ export async function warmFetch(url, timeoutMs = 35000) {
   try {
     const r = await fetch(url, { redirect: "follow", signal: ctl.signal });
     await r.text().catch(() => {});
-    return { ok: true, status: r.status, finalUrl: r.url };
+    return { ok: true, status: r.status, finalUrl: r.url, contentType: r.headers.get("content-type") || "" };
   } catch (e) {
     return { ok: false, status: 0, error: String((e && e.message) || e) };
   } finally {

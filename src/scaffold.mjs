@@ -29,6 +29,9 @@ export default {
   framework: "next-app-router",
   discovery: ["router-walk", "crawl"],
 
+  // Screenshots of pages only the crawl finds, nearest "/" first (0 for none).
+  // crawlCaptureMax: 100,
+
   // Section taxonomy: a (route) => group function, or a { root: group } map.
   // Default: the first path segment. Uncomment to customize.
   // groups: (route) => route.split("/")[1] || "root",

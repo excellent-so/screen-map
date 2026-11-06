@@ -155,6 +155,9 @@ export async function run() {
     "the viewer's own CSS reads the kit's token names, not the old ones");
   eq((own.match(/font-size:\s*(\d+(?:\.\d+)?)px/g) || []).filter((d) => parseFloat(d.split(":")[1]) < 12), [], "no text in the viewer's own CSS is under 12px");
   ok(!/class:"btn|class="btn /.test(viewer), "the viewer's buttons are the kit's ex-btn");
+  // "In review" is drawn on a screenshot (the app's own colours), so it keeps the light tokens in both themes.
+  ok(viewer.includes('el("div",{class:"inrev theme-light"}'), "the in-review label on a screenshot keeps the kit's light tokens in the dark theme");
+  ok(/\.thumb \.inrev \.ex-badge \{ box-shadow: 0 0 0 1px var\(--color-card\)/.test(own), "the in-review label is ringed, so it holds on a dark screenshot too");
 
   // Light by default, whatever the OS says; dark is the reader's choice.
   ok(!bootTheme(viewer), "the viewer starts light with nothing stored");

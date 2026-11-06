@@ -72,6 +72,13 @@ function statesFor(screen, wanted) {
   return out;
 }
 
+/** Read a screen's links, or where it redirects, from a capture's rendered DOM (`res`). */
+export function linksFromCapture(s, res) {
+  const finalPath = normalizePath(res.finalUrl), reqPath = normalizePath(s.url);
+  if (finalPath && finalPath !== reqPath) { s.redirectTo = finalPath; s.outLinks = []; }
+  else { s.outLinks = extractHrefs(res.dom); s.redirectTo = null; }
+}
+
 export async function captureAll(screens, opts = {}) {
   const {
     states = ["default", "loading"], force = false, limit = 0,
@@ -86,7 +93,7 @@ export async function captureAll(screens, opts = {}) {
   if (!hasChrome()) {
     log("capture: no Chrome found — skipping captures (nodes still render, greyed).");
     for (const s of screens) s.states = [];
-    return { captured: 0, skipped: 0, failed: 0 };
+    return { captured: 0, skipped: 0, failed: 0, screens: 0 };
   }
 
   let targets = screens.filter((s) => s.resolved && s.url);
@@ -135,9 +142,7 @@ export async function captureAll(screens, opts = {}) {
     if (res.ok) { st.shot = rel; st.ok = true; st.bytes = res.bytes; captured++; }
     else { st.ok = false; st.error = res.error; failed++; }
     if (doHarvest && res.dom) {
-      const finalPath = normalizePath(res.finalUrl), reqPath = normalizePath(s.url);
-      if (finalPath && finalPath !== reqPath) { s.redirectTo = finalPath; s.outLinks = []; }
-      else { s.outLinks = extractHrefs(res.dom); s.redirectTo = null; }
+      linksFromCapture(s, res);
       linksCache[s.id] = { outLinks: s.outLinks, redirectTo: s.redirectTo, at: st.capturedAt };
     }
     done++;
@@ -165,9 +170,7 @@ export async function captureAll(screens, opts = {}) {
         st.shot = rel; st.ok = true; st.bytes = res.bytes; delete st.error;
         captured++; failed--; recovered++;
         if (doHarvest && res.dom) {
-          const finalPath = normalizePath(res.finalUrl), reqPath = normalizePath(s.url);
-          if (finalPath && finalPath !== reqPath) { s.redirectTo = finalPath; s.outLinks = []; }
-          else { s.outLinks = extractHrefs(res.dom); s.redirectTo = null; }
+          linksFromCapture(s, res);
           linksCache[s.id] = { outLinks: s.outLinks, redirectTo: s.redirectTo, at: st.capturedAt };
         }
       } else {
@@ -179,5 +182,5 @@ export async function captureAll(screens, opts = {}) {
 
   writeJson(LINKS_FILE, linksCache);
   log(`capture: done — ${captured} new, ${skipped} cached, ${failed} failed.`);
-  return { captured, skipped, failed };
+  return { captured, skipped, failed, screens: targets.length };
 }

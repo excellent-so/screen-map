@@ -896,7 +896,10 @@ header { position: relative; z-index: 20; border-bottom: 1px solid var(--color-b
 .thumb img { display: block; width: 100%; }
 .thumb .zoom { position: absolute; top: 6px; right: 6px; display: none; background: var(--color-card); cursor: zoom-in; }
 .card:hover .thumb .zoom, .card:focus-within .thumb .zoom { display: inline-flex; }
+/* "In review" sits on the screenshot, which is the app's own colours whatever the viewer's theme, so the
+   label keeps the light tokens (.theme-light: ink, white text) in both themes, ringed so it holds on a dark shot. */
 .thumb .inrev { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+.thumb .inrev .ex-badge { box-shadow: 0 0 0 1px var(--color-card), var(--shadow-surface-3); }
 .cbody { padding: 10px 12px 12px; }
 .route { color: var(--color-strong); font-family: var(--font-mono); font-size: var(--text-meta); word-break: break-all; }
 .badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
@@ -1597,9 +1600,12 @@ function passes(s){
 
 function defState(s){ return (s.states||[]).find(x=>x.state===(s._view||"default")&&x.ok) || (s.states||[]).find(x=>x.ok); }
 function shotFor(s){ const st=defState(s); return st?st.shot:null; }
-// Append capturedAt as a cache-buster so a refreshed screen actually repaints.
+// Append capturedAt as a cache-buster so a refreshed screen actually repaints. The path is
+// encoded: a page the crawl found can have a % or a space in its name.
 function shotSrc(s){ const st=defState(s); if(!st||!st.shot) return null;
-  return st.shot + (st.capturedAt?`?t=${encodeURIComponent(st.capturedAt)}`:""); }
+  return encodeURI(st.shot) + (st.capturedAt?`?t=${encodeURIComponent(st.capturedAt)}`:""); }
+// Why a screen has no shot, when the build said: cold-start only, or not a page.
+function noShotReason(s){ const st=(s&&s.states||[]).find(x=>x.state==="default"&&x.capture===false&&x.reason); return st?st.reason:null; }
 
 // Compact relative age ("just now" / "5m" / "3h" / "2d") for capture timestamps.
 function relTime(iso){ if(!iso) return ""; const t=Date.parse(iso); if(isNaN(t)) return "";
@@ -1615,13 +1621,13 @@ function versionsOf(s){ const st=(s&&s.states||[]).find(x=>x.state==="default"&&
   if(!st||!st.shot) return [];
   const hist=Array.isArray(st.history)?st.history:[];
   return [{shot:st.shot,capturedAt:st.capturedAt,now:true},...hist]; }
-function verSrc(v){ const t=v.capturedAt||v.archivedAt; return v.shot+(t?`?t=${encodeURIComponent(t)}`:""); }
+function verSrc(v){ const t=v.capturedAt||v.archivedAt; return encodeURI(v.shot)+(t?`?t=${encodeURIComponent(t)}`:""); }
 function verAge(v){ return v.now?"now":relTime(v.capturedAt||v.archivedAt); }
 
 function lbOpen(){ return document.getElementById("lb").classList.contains("on"); }
 function closeLightbox(){ document.getElementById("lb").classList.remove("on"); }
-function lbEmptyMsg(s){ const cold=(s.states||[]).find(x=>x.cold&&x.reason);
-  return cold?cold.reason:(s.resolved?`No capture for this screen yet. Run ${CLI} build.`:(s.resolveNote||"An unresolved dynamic route: there's no concrete page to capture.")); }
+function lbEmptyMsg(s){ const why=noShotReason(s);
+  return why?why:(s.resolved?`No capture for this screen yet. Run ${CLI} build.`:(s.resolveNote||"An unresolved dynamic route: there's no concrete page to capture.")); }
 function wireLbImgError(){ const img=document.querySelector("#lbimg img"); if(!img) return;
   img.addEventListener("error",()=>{ const box=document.getElementById("lbimg"); if(box){ box.classList.remove("cmp"); box.innerHTML=`<div class="lb-none">The screenshot file is missing. Run ${CLI} build again.</div>`; } }); }
 function openLightbox(id, opts={}){ const s=byId.get(id); if(!s) return;
@@ -1682,13 +1688,13 @@ function card(s){
   if(src){ const img=el("img",{src,loading:"lazy",alt:""});
     img.addEventListener("error",()=>{ thumb.innerHTML=""; thumb.append(el("div",{class:"ph"},"Screenshot missing")); });
     thumb.append(img); }
-  else { const cold=(s.states||[]).find(x=>x.cold&&x.reason);
-    thumb.append(el("div",{class:"ph"}, cold?cold.reason:(s.resolved?"No capture yet":(s.resolveNote||"Unresolved")))); }
+  else { const why=noShotReason(s);
+    thumb.append(el("div",{class:"ph"}, why?why:(s.resolved?"No capture yet":(s.resolveNote||"Unresolved")))); }
   thumb.append(el("button",{type:"button",class:BTN.outline+" ex-btn--icon zoom",title:"View full size","aria-label":"View full size",
     onclick:(ev)=>{ev.stopPropagation();openLightbox(s.id);}},"⤢"));
   // "In review" rides centered on the shot itself, so the badge row stays lean.
   const ar=activeReviews(s.id);
-  if(ar.length) thumb.append(el("div",{class:"inrev"},
+  if(ar.length) thumb.append(el("div",{class:"inrev theme-light"},
     el("span",{class:BADGE.review},`${ar.length} in review`)));
   c.append(thumb);
   const body=el("div",{class:"cbody"});
@@ -2314,6 +2320,8 @@ async function recapture(ids, n){
       // Advance the poll cursor to the write we just caused so auto-refresh doesn't
       // redundantly refetch + re-toast for our own recapture.
       try{ S.rev=await (await fetch("/rev",{cache:"no-store"})).json(); }catch{}
+      // The server read the refreshed pages' links again: take its edges, orphans and dead ends.
+      await refetchMap();
       if(lbOpen()&&byId.has(S.lbId)) renderLightbox();
       toast(`Refreshed ${j.captured}/${j.requested} screen(s)${j.captured<j.requested?" (some failed)":""}.`);
     } else { toast("Refresh failed: "+((j&&j.error)||"?")); if(n) n.status="sent"; }
@@ -2408,8 +2416,8 @@ function stageFrame(s,cls){
   if(src){ const img=el("img",{src,alt:"Screenshot of "+s.route,loading:"lazy"});
     img.addEventListener("error",()=>{ box.innerHTML=""; box.append(el("div",{class:"sc-ph"},`Screenshot missing. Run ${CLI} build again.`)); });
     box.append(img); }
-  else { const cold=s&&(s.states||[]).find(x=>x.cold&&x.reason);
-    box.append(el("div",{class:"sc-ph"}, cold?cold.reason:(s&&s.resolved?"No capture yet":(s&&s.resolveNote)||"Unresolved route"))); }
+  else { const why=noShotReason(s);
+    box.append(el("div",{class:"sc-ph"}, why?why:(s&&s.resolved?"No capture yet":(s&&s.resolveNote)||"Unresolved route"))); }
   return box;
 }
 function stageNote(n){

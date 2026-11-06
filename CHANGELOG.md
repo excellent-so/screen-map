@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [0.2.4] - 2026-11-05
 
+### Added
+
+- Pages the crawl reaches now get screenshots, taken the same way as the routes the walk finds, and sit on
+  the board in their path's group. That covers every page of an app that isn't a Next.js App Router app, and
+  the pages a Next app serves outside `app/` (a Pages Router page, a rewrite). They are never orphans. A URL
+  that isn't a page (a stylesheet, a feed, an error status, a redirect to another site) stays on the map
+  without a screenshot and says why. Each build takes them fresh, at most `crawlCaptureMax` of them (100 by
+  default, nearest `/` first; `--crawl-capture-max=N` for one build, `0` for none), and `regraph` keeps them.
+
 ### Changed
 
 - Screen Map has its own mark: two screens joined by a line. It sits left of the name in the viewer's header,
@@ -29,6 +38,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   removed in 0.2.4, use `markdown` or `github`.
 - The bug report's request to a hosted endpoint, its web-form fallback, and the variable that set the
   endpoint.
+
+### Fixed
+
+- The flow graph no longer draws the crawl's own copy of every link a page's DOM or source already shows, and
+  a link many pages share counts as global nav whichever of them found it, so "Show global nav links" hides
+  the sidebar's links between columns.
+- `screen-map recapture` and a note's "Refresh screens" read the refreshed pages' links again and recompute
+  orphans and dead ends, so the Orphan and Dead end badges follow the fix. `build` and `regraph` keep the
+  before/after history a recapture built up, and a shot a build reuses keeps the time it was taken.
+- In the dark theme, the "in review" label on a screenshot is ink with white text, as in the light theme, so
+  it reads on a light screenshot.
+- With no prototypes, `screen-map serve` answers `prototypes.json` with an empty list, so loading the viewer no
+  longer logs a failed request.
 
 ## [0.2.3] - 2026-11-05
 

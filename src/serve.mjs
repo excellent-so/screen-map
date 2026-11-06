@@ -107,6 +107,13 @@ export function serve({ port = 4610, open = false } = {}) {
       return;
     }
 
+    // No prototypes yet: an empty list, not a 404 the browser would log on every page load.
+    if (req.method === "GET" && url.pathname === "/prototypes.json" && !fs.existsSync(PROTOTYPES_FILE)) {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      res.end(JSON.stringify({ prototypes: [] }));
+      return;
+    }
+
     // Static.
     let rel;
     try { rel = decodeURIComponent(url.pathname); } catch { res.writeHead(400); res.end("bad request"); return; }

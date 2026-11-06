@@ -1,17 +1,20 @@
 // A tiny static HTML site that mirrors the committed fixture app (fixture/app): the same routes and
-// the same links between them, as plain pages. It needs no framework and no install, so a map of it
-// can be built anywhere Node and Chrome are. Used by test-standalone.mjs.
+// the same links between them, as plain pages, plus /help, the fixture's Pages Router page
+// (fixture/pages/help.tsx), which the App Router walk doesn't list and only the crawl finds. It
+// needs no framework and no install, so a map of it can be built anywhere Node and Chrome are.
+// Used by test-standalone.mjs and the crawl-capture tests.
 //
 //   import { startFixtureSite } from "./fixture-site.mjs";
 //   const site = await startFixtureSite();   // { base, port, close() } on a free 127.0.0.1 port
 
 import http from "node:http";
 
-// Each page and the links it shows. Keep in step with the <Link href> targets in fixture/app.
+// Each page and the links it shows. Keep in step with the <Link href> targets in fixture/app and fixture/pages.
 const PAGES = [
   { match: "/", title: "Home", lede: "The fixture app's front page.", links: [["/dashboard", "Dashboard"], ["/settings", "Settings"], ["/reports", "Reports"]] },
   { match: "/dashboard", title: "Dashboard", lede: "This week at a glance.", links: [["/reports", "See reports"]] },
-  { match: "/settings", title: "Settings", lede: "Account and workspace settings.", links: [["/", "Home"], ["/about", "About"]] },
+  { match: "/settings", title: "Settings", lede: "Account and workspace settings.", links: [["/", "Home"], ["/about", "About"], ["/help", "Help"]] },
+  { match: "/help", title: "Help", lede: "Questions and answers.", links: [["/", "Home"]] },
   { match: "/about", title: "About", lede: "No way out from here.", links: [] },
   { match: "/reports", title: "Reports", lede: "Every report, newest first.", links: [["/reports/q1", "Report q1"], ["/reports/q2", "Report q2"], ["/reports/q3", "Report q3"]] },
   { match: /^\/reports\/[^/]+$/, title: "Report", lede: "One report.", links: [["/reports", "Back to all reports"]] },

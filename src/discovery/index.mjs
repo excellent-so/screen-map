@@ -27,12 +27,20 @@ export function registerDiscoveryAdapter(adapter) {
   if (adapter && adapter.name) ADAPTERS[adapter.name] = adapter;
 }
 
+/** Does any walk screen's route (exact, or as a pattern) cover the concrete path `p`? */
+export function walkCovers(screens, p) {
+  return screens.some((s) => s.route === p || patternToRegex(s.route).test(p));
+}
+
 /**
  * Fold a crawl result into the walk-discovered screens. Returns:
  *   { screens, provenOrphans, crawlOnly, crawlEdges }
  *
  *  - screens        walk screens (annotated `discoveredBy += "crawl"` when reached)
- *                   plus synthesized nodes for crawl-only routes
+ *                   plus synthesized nodes for crawl-only routes. A node is `page: true`
+ *                   when the crawl got an HTML page there (the build screenshots it), or
+ *                   `page: false` with the reason as its default state (a stylesheet, a
+ *                   feed, an error status, a redirect to another site)
  *  - provenOrphans  walk route ids the crawl never reached (real orphans, not inferred)
  *  - crawlOnly      reached paths matching no walk route (runtime-only routes)
  *  - crawlEdges     crawl link edges mapped to screen ids (validate the static graph)
@@ -42,6 +50,7 @@ export function unionCrawl(screens, crawlResult) {
     return { screens, provenOrphans: [], crawlOnly: [], crawlEdges: [], crawlRan: false };
   }
   const { reachedPaths, edges } = crawlResult;
+  const notPages = crawlResult.notPages || new Map();
 
   // 1. Annotate walk screens with crawl reachability; collect proven orphans.
   const provenOrphans = [];
@@ -54,8 +63,7 @@ export function unionCrawl(screens, crawlResult) {
   }
 
   // 2. crawl-only routes: reached paths that match no walk screen → synthesized nodes.
-  const matchesAnyWalk = (p) => screens.some((s) => s.route === p || patternToRegex(s.route).test(p));
-  const crawlOnly = [...reachedPaths].filter((p) => !matchesAnyWalk(p));
+  const crawlOnly = [...reachedPaths].filter((p) => !walkCovers(screens, p));
   const synthesized = crawlOnly.map((p) => ({
     id: routeId(p),
     route: p,
@@ -67,9 +75,10 @@ export function unionCrawl(screens, crawlResult) {
     url: p,
     resolved: true,
     resolveNote: "crawl (runtime-only)",
-    states: [],
+    states: notPages.has(p) ? [{ state: "default", capture: false, reason: notPages.get(p) }] : [],
     discoveredBy: ["crawl"],
     crawlOnly: true,
+    page: !notPages.has(p),
   }));
   const allScreens = [...screens, ...synthesized];
 

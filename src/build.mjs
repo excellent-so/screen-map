@@ -1,18 +1,18 @@
 // Screen Map — build: run the whole pipeline and emit the artifact.
-// enumerate(walk) → flows → resolve → capture → crawl∪walk → graph → screenmap.json.
+// enumerate(walk) → flows → resolve → capture → crawl∪walk → capture crawl-found → graph → screenmap.json.
 
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { env, paths, devBaseUrl } from "./env.mjs";
 import { ensureDirs, readJson, writeJson, routeExcluded } from "./lib.mjs";
-import { getDiscoveryAdapter, unionCrawl } from "./discovery/index.mjs";
+import { getDiscoveryAdapter, unionCrawl, walkCovers } from "./discovery/index.mjs";
 import { crawl as runCrawl } from "./discovery/crawl.mjs";
 import { expandFlows } from "./flows.mjs";
 import { sweepParamStates } from "./discovery/state-sweep.mjs";
 import { resolveScreens } from "./resolve.mjs";
 import { buildGraph } from "./graph.mjs";
-import { captureAll } from "./capture.mjs";
+import { captureAll, linksFromCapture } from "./capture.mjs";
 import { screenshot, hasChrome } from "./browser.mjs";
 
 const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -30,6 +30,40 @@ function adapterOrThrow() {
     );
   }
   return adapter;
+}
+
+/** The navigation graph over `screens`: their own links, the source scan and the crawl's edges. */
+function graphOf(screens, crawlEdges = []) {
+  const adapter = getDiscoveryAdapter(env().config.framework);
+  const staticEdges = adapter?.deriveStaticEdges ? adapter.deriveStaticEdges(screens) : [];
+  return buildGraph(screens, { staticEdges, crawlEdges });
+}
+
+// ---- capture history -------------------------------------------------------
+
+const defaultShot = (s) => (s.states || []).find((x) => x.state === "default" && x.ok && x.shot) || null;
+
+/** Each screen's default capture in the last map written (a recapture updates that map, not prev.json). */
+function priorShots() {
+  const { MAP_FILE, BUILDS_DIR } = paths();
+  const pick = (f) => { const m = readJson(f, null); return Array.isArray(m?.screens) ? m : null; };
+  const prev = pick(MAP_FILE) || pick(path.join(BUILDS_DIR, "prev.json"));
+  const out = new Map();
+  for (const s of prev?.screens || []) { const st = defaultShot(s); if (st) out.set(s.id, st); }
+  return out;
+}
+
+/** Keep the before/after history a recapture built up; a shot the build reused keeps its time too. */
+function keepHistory(screens, prior) {
+  for (const s of screens) {
+    const st = defaultShot(s), was = prior.get(s.id);
+    if (!st || !was || st.shot !== was.shot) continue;
+    if (!st.history && Array.isArray(was.history) && was.history.length) st.history = was.history;
+    if (st.cached && !st.capturedAt && was.capturedAt) {
+      st.capturedAt = was.capturedAt;
+      if (was.recaptured) st.recaptured = true;
+    }
+  }
 }
 
 /** Distinct groups in stable first-appearance order. */
@@ -74,6 +108,12 @@ function reuseFromPrev(screens, log2) {
     return null;
   }
   const prevById = new Map(prev.screens.map((s) => [s.id, s]));
+  // Pages only the crawl found aren't in the walk: keep the last build's, with their shots.
+  const walk = screens.slice();
+  const exclude = env().config.exclude || [];
+  for (const p of prev.screens) {
+    if (p.crawlOnly && !walkCovers(walk, p.route) && !routeExcluded(p.route, exclude)) screens.push({ ...p });
+  }
   let shots = 0;
   for (const s of screens) {
     const p = prevById.get(s.id);
@@ -86,6 +126,30 @@ function reuseFromPrev(screens, log2) {
   return prev;
 }
 
+// ---- pages only the crawl found -------------------------------------------
+
+/**
+ * Screenshot the pages only the crawl found, with the same capture as the walk's routes.
+ * They have no source file to tell whether they changed, so every build takes them again.
+ * At most `max` of them (config.crawlCaptureMax), nearest `/` first, within what is left
+ * of a --limit. URLs that aren't pages (`page: false`) keep their reason and no shot.
+ */
+async function captureCrawlFound(screens, { max, limitLeft, capture }) {
+  const pages = screens.filter((s) => s.crawlOnly && s.page);
+  if (!pages.length) return;
+  const budget = Math.min(max, limitLeft);
+  if (budget <= 0) {
+    log(`• capture: pages only the crawl found (skipped: ${max <= 0 ? "crawlCaptureMax is 0" : "--limit reached"})`);
+    return;
+  }
+  log("• capture: pages only the crawl found");
+  const wanted = capture.only && capture.only.length ? pages.filter((s) => capture.only.includes(s.group)).length : pages.length;
+  await captureAll(pages, { ...capture, force: true, limit: Number.isFinite(budget) ? budget : 0 });
+  if (budget === max && wanted > max) {
+    log(`  ${wanted - max} more crawl-found page(s) have no screenshot: crawlCaptureMax is ${max} (raise it in the config, or pass --crawl-capture-max=N)`);
+  }
+}
+
 // ---- the main build ------------------------------------------------------
 
 export async function runBuild(opts = {}) {
@@ -93,6 +157,7 @@ export async function runBuild(opts = {}) {
   const { OUT_DIR, BUILDS_DIR, MAP_FILE, NOTES_FILE, LINKS_FILE, HISTORY_DIR } = paths();
   const t0 = Date.now();
   const adapter = adapterOrThrow();
+  const prior = priorShots();
 
   log("• enumerate (router-walk)");
   let screens = adapter.enumerate();
@@ -106,6 +171,12 @@ export async function runBuild(opts = {}) {
   }
   log(`  ${screens.length} screens (${screens.filter((s) => s.dynamic).length} dynamic)`);
 
+  const capture = {
+    states: opts.states || ["default", "loading"],
+    concurrency: opts.concurrency || 2, only: opts.only || null, log,
+    retryFailed: Boolean(opts.retryFailed),
+  };
+  let walkTargets = 0;
   let prevProven = [], prevCrawlOnly = [];
   if (opts.reuse) {
     log("• regraph (reuse resolutions + on-disk shots)");
@@ -121,12 +192,8 @@ export async function runBuild(opts = {}) {
 
     if (!opts.noCapture) {
       log("• capture");
-      await captureAll(screens, {
-        states: opts.states || ["default", "loading"],
-        force: opts.force, limit: opts.limit || 0,
-        concurrency: opts.concurrency || 2, only: opts.only || null, log,
-        retryFailed: Boolean(opts.retryFailed),
-      });
+      const res = await captureAll(screens, { ...capture, force: opts.force, limit: opts.limit || 0 });
+      walkTargets = res.screens;
     } else {
       log("• capture (skipped)");
       for (const s of screens) if (!s.states || !s.states.length) {
@@ -162,10 +229,15 @@ export async function runBuild(opts = {}) {
   } else if (wantCrawl) {
     log("• crawl (skipped — no Chrome; proven-orphan report unavailable)");
   }
+  if (crawlRan) {
+    const limitLeft = opts.limit > 0 ? Math.max(0, opts.limit - walkTargets) : Infinity;
+    await captureCrawlFound(screens, { max: env().config.crawlCaptureMax, limitLeft, capture });
+  }
+
+  keepHistory(screens, prior);
 
   log("• graph");
-  const staticEdges = adapter.deriveStaticEdges ? adapter.deriveStaticEdges(screens) : [];
-  const graph = buildGraph(screens, { staticEdges, crawlEdges });
+  const graph = graphOf(screens, crawlEdges);
   log(`  ${graph.edges.length} edges · ${graph.orphans.length} orphans · ${graph.deadEnds.length} dead-ends`);
   for (const s of screens) delete s.outLinks; // encoded in edges; keep the JSON lean
 
@@ -257,10 +329,31 @@ export async function captureFlow(opts = {}) {
 
 const HISTORY_KEEP = 12;
 
+/**
+ * Bring the map's graph up to date after the `retaken` screens were captured again: their
+ * fresh links replace what they linked to before (and what the crawl saw from them), so
+ * their Orphan and Dead end signals, and their neighbours', are current.
+ */
+function regraphAfterRecapture(map, retaken) {
+  const links = readJson(paths().LINKS_FILE, {});
+  for (const s of map.screens) {
+    if (retaken.has(s.id) || !links[s.id]) continue;
+    s.outLinks = links[s.id].outLinks || [];
+    if (s.redirectTo == null) s.redirectTo = links[s.id].redirectTo || null;
+  }
+  const crawlEdges = (map.edges || [])
+    .filter((e) => e.source === "crawl" && !retaken.has(e.from))
+    .map((e) => ({ from: e.from, to: e.to, kind: "crawl", source: "crawl" }));
+  const graph = graphOf(map.screens, crawlEdges);
+  map.edges = graph.edges; map.orphans = graph.orphans; map.deadEnds = graph.deadEnds;
+  for (const s of map.screens) delete s.outLinks;
+  if (map.build) map.build.capturedCount = map.screens.filter((s) => (s.states || []).some((x) => x.ok)).length;
+}
+
 /** Re-screenshot a set of already-resolved screens (by id) in place — the review-loop refresh. */
 export async function recaptureIds(ids = [], opts = {}) {
   ensureDirs();
-  const { SHOTS_DIR, MAP_FILE, HISTORY_DIR, OUT_DIR } = paths();
+  const { SHOTS_DIR, MAP_FILE, HISTORY_DIR, OUT_DIR, LINKS_FILE } = paths();
   const base = devBaseUrl();
   const conc = Math.max(1, Math.min(4, Number.isFinite(opts.concurrency) ? Math.floor(opts.concurrency) : 2));
   const map = readJson(MAP_FILE, null);
@@ -271,6 +364,8 @@ export async function recaptureIds(ids = [], opts = {}) {
   const targets = ids.map((id) => byId.get(id)).filter((s) => s && s.resolved && s.url);
   const missing = ids.filter((id) => !byId.get(id)?.resolved || !byId.get(id)?.url);
   const results = missing.map((id) => ({ id, ok: false, error: "unresolved" }));
+  const links = readJson(LINKS_FILE, {});
+  const retaken = new Set(); // screens whose links were read again
 
   let cursor = 0;
   const worker = async (w) => {
@@ -279,7 +374,7 @@ export async function recaptureIds(ids = [], opts = {}) {
       const outAbs = path.join(SHOTS_DIR, `${s.id}.default.png`);
       const rel = path.relative(path.dirname(SHOTS_DIR), outAbs);
       const tmpAbs = path.join(SHOTS_DIR, `${s.id}.default.recap.png`);
-      const res = await screenshot(base + s.url, tmpAbs, { virtualTime: 9000, profile: `re${w}`, warm: true, harvest: false });
+      const res = await screenshot(base + s.url, tmpAbs, { virtualTime: 9000, profile: `re${w}`, warm: true, harvest: true });
       const capturedAt = new Date().toISOString();
       if (res.ok) {
         try {
@@ -301,6 +396,11 @@ export async function recaptureIds(ids = [], opts = {}) {
           fs.renameSync(tmpAbs, outAbs);
           const others = Array.isArray(s.states) ? s.states.filter((x) => x.state !== "default") : [];
           s.states = [{ state: "default", ok: true, shot: rel, capturedAt, recaptured: true, history }, ...others];
+          if (res.dom) {
+            linksFromCapture(s, res);
+            links[s.id] = { outLinks: s.outLinks, redirectTo: s.redirectTo, at: capturedAt };
+            retaken.add(s.id);
+          }
           results.push({ id: s.id, ok: true, capturedAt, route: s.route, history });
         } catch (e) {
           results.push({ id: s.id, ok: false, error: "swap-failed:" + e.code, route: s.route });
@@ -312,6 +412,10 @@ export async function recaptureIds(ids = [], opts = {}) {
     }
   };
   await Promise.all(Array.from({ length: Math.min(conc, targets.length || 1) }, (_, w) => worker(w)));
+  if (retaken.size) {
+    writeJson(LINKS_FILE, links);
+    regraphAfterRecapture(map, retaken);
+  }
   writeJson(MAP_FILE, map);
   const captured = results.filter((r) => r.ok).length;
   log(`↻ recapture: ${captured}/${ids.length} refreshed (concurrency ${conc}).`);

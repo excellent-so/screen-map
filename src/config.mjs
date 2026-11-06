@@ -22,6 +22,9 @@ export function defaults() {
     devBaseUrl: "http://localhost:3000",
     framework: "next-app-router",
     discovery: ["router-walk", "crawl"], // the walk ∪ the crawl; both by default
+    // At most this many pages that only the crawl found get screenshots (nearest `/`
+    // first), so a big site can't run on and on. 0 takes none.
+    crawlCaptureMax: 100,
     // Section taxonomy. A function (route → group) or a { root: group } map. Default:
     // the first path segment, which is a sensible generic grouping for any app.
     groups: null,
@@ -110,6 +113,13 @@ function normalizeBackbone(list) {
     .filter((t) => t && typeof t.to === "string");
 }
 
+/** A count ≥ 0 (Infinity allowed) from a number or numeric string; false is 0; else `dflt`. */
+function normalizeCount(v, dflt) {
+  if (v === false) return 0;
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() ? Number(v) : NaN;
+  return n >= 0 ? Math.floor(n) : dflt;
+}
+
 function normalizeColdPattern(p) {
   if (!p) return null;
   if (p instanceof RegExp) return p;
@@ -149,6 +159,7 @@ export async function loadConfig({ cwd = process.cwd(), overrides = {} } = {}) {
   merged.discovery = Array.isArray(merged.discovery) ? merged.discovery : [merged.discovery].filter(Boolean);
   merged.output = merged.output && typeof merged.output === "object" ? merged.output : { adapter: "markdown" };
   merged.exclude = (Array.isArray(merged.exclude) ? merged.exclude : [merged.exclude]).filter((p) => typeof p === "string" && p);
+  merged.crawlCaptureMax = normalizeCount(merged.crawlCaptureMax, base.crawlCaptureMax);
 
   return { config: merged, root, file: found ? found.file : null };
 }

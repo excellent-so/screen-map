@@ -6,6 +6,7 @@ export default function Settings() {
       <h1>Settings</h1>
       <Link href="/">Home</Link>
       <Link href="/about">About</Link>
+      <Link href="/help">Help</Link>
     </main>
   );
 }

@@ -9,8 +9,9 @@ finds the orphan pages nothing links to. It runs on your machine and has no runt
 
 **What works where.** Route discovery and orphan finding work for Next.js App Router apps: Screen Map
 reads every route from your `app/` (or `src/app/`) folder, screenshots each one, and reports the routes
-nothing links to. Other apps get the crawl only: Screen Map follows links from `/` on your running app and
-maps the pages it reaches and the links between them, without screenshots or an orphan report.
+nothing links to. Other apps get the crawl only: Screen Map follows links from `/` on your running app,
+screenshots the pages it reaches and maps the links between them, without an orphan report. In a Next app,
+a page the crawl reaches that isn't in the folder (a Pages Router page, a rewrite) gets a screenshot too.
 
 ## Quick start
 
@@ -70,7 +71,7 @@ and it remembers. Served by `open` or `serve`, it saves notes to `.screenmap/not
 | `screen-map open` | Serve the viewer and open it in your browser |
 | `screen-map serve` | Serve the viewer (notes save to disk) |
 | `screen-map regraph` | Rebuild the graph from the last build's screenshots, without Chrome |
-| `screen-map recapture --ids=a,b` | Screenshot some screens again (after a fix) |
+| `screen-map recapture --ids=a,b` | Screenshot some screens again and re-read their links (after a fix) |
 | `screen-map route` | Turn review notes into tracked work (see [Findings](#findings)) |
 | `screen-map diff` | Show what changed since the last build |
 | `screen-map init` | Write a starter `screen-map.config.mjs` |
@@ -79,8 +80,9 @@ and it remembers. Served by `open` or `serve`, it saves notes to `.screenmap/not
 
 Useful `build` flags: `--base=<url>` (your dev server), `--no-capture` (graph only, no Chrome),
 `--no-crawl` (skip the crawl), `--only=g1,g2` (only these route groups), `--concurrency=N`, `--limit=N`,
-`--download-chrome` (fetch Chrome if none is installed), and `--managed-server` (see
-[Running its own dev server](#running-its-own-dev-server)). `screen-map help` lists them all.
+`--crawl-capture-max=N` (see [Discovery](#discovery)), `--download-chrome` (fetch Chrome if none is
+installed), and `--managed-server` (see [Running its own dev server](#running-its-own-dev-server)).
+`screen-map help` lists them all.
 
 ## Configuration
 
@@ -93,6 +95,7 @@ export default {
   devBaseUrl: "http://localhost:3000", // the --base flag or SCREENMAP_BASE overrides it
   framework: "next-app-router",        // the discovery adapter
   discovery: ["router-walk", "crawl"], // drop "crawl" to skip the crawl
+  crawlCaptureMax: 100,                // screenshots of pages only the crawl finds; 0 for none
   groups: (route) => route.split("/")[1] || "root", // the board's columns
   navBackbone: [],                     // global nav targets, so nav-only pages aren't orphans
   noChromeRoots: [],                   // route roots without the global nav (auth pages)
@@ -180,7 +183,16 @@ Screen Map combines two sources:
   works for any framework, and checks the links the walk found in source.
 
 A route the walk lists and the crawl never reaches is a proven orphan. On an app without an App Router
-folder there is no walk, so the map is the crawl alone: the pages reachable from `/` and their links.
+folder there is no walk, so the map is the crawl alone: the pages reachable from `/`, each with a
+screenshot, and their links.
+
+A page only the crawl finds is screenshotted like the walk's routes, at the same size and settings, and
+sits on the board in its path's group. It's never an orphan: the crawl reached it by a link. A URL that
+isn't a page of the app (a stylesheet, a feed, an error status, a redirect to another site) stays on the
+map without a screenshot and says why. These pages have no source file to show when they change, so every
+build screenshots them again. To keep a big site's build short, at most `crawlCaptureMax` of them get
+screenshots (100 by default, nearest `/` first; `0` takes none), and `--crawl-capture-max=N` sets it for
+one build. The crawl itself stops after 200 pages (`--crawl-max=N`).
 
 ## Findings
 

@@ -895,7 +895,10 @@ header { position: relative; z-index: 20; border-bottom: 1px solid var(--color-b
 .thumb img { display: block; width: 100%; }
 .thumb .zoom { position: absolute; top: 6px; right: 6px; display: none; background: var(--color-card); cursor: zoom-in; }
 .card:hover .thumb .zoom, .card:focus-within .thumb .zoom { display: inline-flex; }
+/* "In review" sits on the screenshot, which is the app's own colours whatever the viewer's theme, so the
+   label keeps the light tokens (.theme-light: ink, white text) in both themes, ringed so it holds on a dark shot. */
 .thumb .inrev { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+.thumb .inrev .ex-badge { box-shadow: 0 0 0 1px var(--color-card), var(--shadow-surface-3); }
 .cbody { padding: 10px 12px 12px; }
 .route { color: var(--color-strong); font-family: var(--font-mono); font-size: var(--text-meta); word-break: break-all; }
 .badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
@@ -1289,7 +1292,7 @@ body { height: auto; }
         <div class="colh"><span class="gname">Settings</span><span class="ex-badge ex-badge--count">2</span></div>
         <div class="cards">
           <div class="card">
-            <div class="thumb"><div class="sg-shot"><i></i><i style="width:80%"></i><i style="width:65%"></i></div><div class="inrev"><span class="ex-badge">1 in review</span></div></div>
+            <div class="thumb"><div class="sg-shot"><i></i><i style="width:80%"></i><i style="width:65%"></i></div><div class="inrev theme-light"><span class="ex-badge">1 in review</span></div></div>
             <div class="cbody"><div class="route">/settings/billing</div>
               <div class="badges"><span class="ex-badge ex-badge--warning">Orphan</span><span class="ex-badge ex-badge--info">New</span></div>
               <div class="states"><span class="st on ex-badge ex-badge--success">default</span><span class="st ex-badge ex-badge--unchecked">empty</span></div></div>

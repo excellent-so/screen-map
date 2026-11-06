@@ -37,6 +37,7 @@ function overridesFromFlags(f) {
   if (f.discovery) o.discovery = String(f.discovery).split(",").map((s) => s.trim()).filter(Boolean);
   if (f.chrome) o.chrome = String(f.chrome);
   if (f.output) o.output = { adapter: String(f.output) };
+  if (typeof f["crawl-capture-max"] === "string") o.crawlCaptureMax = Number(f["crawl-capture-max"]);
   return o;
 }
 
@@ -296,6 +297,8 @@ function printHelp() {
       --only=g1,g2         restrict capture to these groups
       --concurrency=N      parallel Chrome workers (default 2)
       --crawl-max=N        crawl page budget (default 200)
+      --crawl-capture-max=N  screenshot at most N pages only the crawl found
+                           (default 100, or crawlCaptureMax in the config; 0 for none)
       --managed-server     boot a PRIVATE, disposable dev server (needs a \`server\`
                            block in the config), capture against it, then tear it down
                            fully — no dependency on a server you keep running. Immune
@@ -331,7 +334,7 @@ function printHelp() {
       --severity=low|medium|high
 
   Zero-config on a standard Next.js App Router app. Other apps get the crawl only: the
-  pages reachable by links from /, without screenshots or the orphan report.
+  pages reachable by links from /, with screenshots, but no orphan report.
   Config: screen-map.config.{mjs,js,json}. Output lives in .screenmap/ (gitignore it).
   Requires your dev server running (or a \`server\` block and --managed-server).`);
 }
