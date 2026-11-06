@@ -11,6 +11,8 @@ import * as server from "./test-server.mjs";
 import * as launch from "./test-launch.mjs";
 import * as crawlCapture from "./test-crawl-capture.mjs";
 import * as reviewLoop from "./test-review-loop.mjs";
+import * as extension from "./test-extension.mjs";
+import * as cliSuite from "./test-cli.mjs";
 
 const suites = [
   ["config", config],
@@ -24,6 +26,8 @@ const suites = [
   ["launch", launch],
   ["crawl capture", crawlCapture],
   ["review loop", reviewLoop],
+  ["extension", extension],
+  ["cli", cliSuite],
 ];
 
 for (const [name, suite] of suites) {

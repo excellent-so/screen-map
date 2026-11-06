@@ -15,6 +15,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { UserError } from "./errors.mjs";
 
 export const CACHE_DIR = path.join(os.homedir(), ".cache", "screen-map");
 
@@ -133,6 +134,8 @@ export function missingBrowserMessage() {
     "  • Point Screen Map at yours:  SCREENMAP_CHROME=/path/to/chrome screen-map build",
     "    (or set `chrome` in screen-map.config.*)",
     "  • Let Screen Map fetch one:   screen-map build --download-chrome",
+    "    (it needs @puppeteer/browsers beside Screen Map; with npx:",
+    "    npx -p @puppeteer/browsers -p @excellent-so/screen-map screen-map build --download-chrome)",
     "",
     "Screen Map never bundles a browser and never runs a hidden postinstall.",
   ].join("\n");
@@ -148,11 +151,13 @@ export async function downloadChrome({ log = console.error } = {}) {
   try {
     browsers = await import("@puppeteer/browsers");
   } catch {
-    throw new Error(
-      "On-demand Chrome download needs the optional `@puppeteer/browsers` package.\n" +
-      "Install it once:  npm i -D @puppeteer/browsers\n" +
-      "…or install system Chrome and re-run (recommended).",
-    );
+    throw new UserError([
+      "--download-chrome needs the optional @puppeteer/browsers package next to Screen Map. Either:",
+      "  • in a project:  npm i -D @excellent-so/screen-map @puppeteer/browsers",
+      "                   npx screen-map build --download-chrome",
+      "  • with npx:      npx -p @puppeteer/browsers -p @excellent-so/screen-map screen-map build --download-chrome",
+      "Or install Google Chrome (https://www.google.com/chrome/) and build again.",
+    ].join("\n"));
   }
   fs.mkdirSync(CACHE_DIR, { recursive: true });
   const { install, resolveBuildId, Browser, detectBrowserPlatform } = browsers;
@@ -179,6 +184,7 @@ export async function downloadChrome({ log = console.error } = {}) {
  *  - source: "explicit" | "system" | "cache" | "download" | null
  */
 export async function resolveChrome({ explicit, allowDownload = false, log = console.error } = {}) {
+  if (explicit && !fs.existsSync(explicit)) log(`(No browser at ${explicit}, from SCREENMAP_CHROME or the config: looking for an installed Chrome instead.)`);
   const found = findChrome(explicit);
   if (found) {
     const source = explicit && found === explicit ? "explicit" : found.startsWith(CACHE_DIR) ? "cache" : "system";

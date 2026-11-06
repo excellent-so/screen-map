@@ -123,17 +123,44 @@ export function normalizePath(href) {
   return h === "" ? "/" : h;
 }
 
-/** Pull distinct internal nav targets out of a rendered DOM string. */
-export function extractHrefs(dom) {
-  const out = new Set();
-  for (const m of dom.matchAll(/href="([^"]+)"/g)) {
-    const raw = m[1];
-    if (!raw.startsWith("/")) continue; // external / anchor
-    if (/^\/(_next|__|icon|apple-icon|favicon)/.test(raw)) continue; // assets
-    const h = normalizePath(raw);
-    if (h) out.add(h);
+const ENTITIES = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">", "#39": "'" };
+
+/**
+ * The internal links in a rendered DOM string: the href of each <a> and <area>. A <link> (a
+ * stylesheet, an icon, a preload) isn't a way to another screen, so it doesn't count. With
+ * `pageUrl` (the page the DOM came from), relative hrefs ("about.html", "../", "?tab=2") and
+ * absolute links to the same origin count too, resolved the way the browser resolves them;
+ * without it, only root-relative hrefs ("/about") do. Returns [{ path, href }] in page order,
+ * one per path: `path` is normalized (no query, hash or trailing slash), `href` is the pathname
+ * as linked, which keeps the trailing slash a directory's relative links need.
+ */
+export function extractLinks(dom, pageUrl) {
+  let page = null;
+  try { page = pageUrl ? new URL(pageUrl) : null; } catch { page = null; }
+  const out = new Map();
+  for (const m of String(dom || "").matchAll(/<(?:a|area)\b[^>]*?\shref="([^"]*)"/gi)) {
+    const raw = m[1].replace(/&(amp|quot|apos|lt|gt|#39);/g, (_, e) => ENTITIES[e]).trim();
+    if (!raw || raw.startsWith("#")) continue;
+    let href;
+    if (page) {
+      let u;
+      try { u = new URL(raw, page); } catch { continue; }
+      if (u.origin !== page.origin) continue; // another site, or mailto:, tel:, javascript:
+      href = u.pathname;
+    } else {
+      if (!raw.startsWith("/") || raw.startsWith("//")) continue; // external, relative or an anchor
+      href = raw.split("#")[0].split("?")[0];
+    }
+    if (/^\/(_next|__|icon|apple-icon|favicon)/.test(href)) continue; // assets
+    const p = normalizePath(href);
+    if (p && !out.has(p)) out.set(p, { path: p, href });
   }
-  return [...out];
+  return [...out.values()];
+}
+
+/** Distinct internal nav targets (normalized paths) in a rendered DOM string; see extractLinks. */
+export function extractHrefs(dom, pageUrl) {
+  return extractLinks(dom, pageUrl).map((l) => l.path);
 }
 
 // ---- JSON IO -------------------------------------------------------------

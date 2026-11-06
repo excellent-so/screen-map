@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { UserError } from "./errors.mjs";
 
 const CONFIG_NAMES = [
   "screen-map.config.mjs",
@@ -48,6 +49,7 @@ export function defaults() {
     // merges on top ({ "/x/[id]": "/x/42" }).
     routeUrls: {},
     chrome: null, // optional explicit Chrome/Chromium path
+    colorScheme: "light", // the color scheme pages are captured in: "light" or "dark"
     output: { adapter: "markdown" }, // "markdown" | "github"
     exclude: [], // route(s) to drop from the map — exact ("/login") drops it + its descendants
     // Optional MANAGED dev server: when set (or `--managed-server`), Screen Map spins
@@ -57,6 +59,14 @@ export function defaults() {
     // true` uses it every run without the flag. null → capture against `devBaseUrl`.
     server: null,
   };
+}
+
+/** The address the last build in `root` was given with --base or SCREENMAP_BASE, or null. */
+function lastBuildBase(root) {
+  try {
+    const map = JSON.parse(fs.readFileSync(path.join(root, ".screenmap", "screenmap.json"), "utf8"));
+    return map?.build?.baseGiven && typeof map.build.devBaseUrl === "string" ? map.build.devBaseUrl : null;
+  } catch { return null; }
 }
 
 /** Find the nearest config file walking up from `startDir`. Returns { file, dir } | null. */
@@ -83,12 +93,41 @@ export function detectAppDir(root) {
 }
 
 async function loadRaw(file) {
-  if (file.endsWith(".json")) {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
+  try {
+    if (file.endsWith(".json")) {
+      return JSON.parse(fs.readFileSync(file, "utf8"));
+    }
+    // ESM/CJS config: import as a module and take the default export (or the module).
+    const mod = await import(pathToFileURL(file).href);
+    return mod.default ?? mod;
+  } catch (e) {
+    const where = path.relative(process.cwd(), file) || file;
+    throw new UserError(`Couldn't load ${where}: ${String((e && e.message) || e).split("\n")[0]}. Fix it, or delete it to use the defaults.`);
   }
-  // ESM/CJS config: import as a module and take the default export (or the module).
-  const mod = await import(pathToFileURL(file).href);
-  return mod.default ?? mod;
+}
+
+/**
+ * The dev server's address in the form the engine joins paths onto: "localhost:3000" gets
+ * http://, and a trailing slash, query or hash goes. Anything it can't read comes back as given,
+ * for baseUrlProblem() to explain.
+ */
+export function normalizeBaseUrl(raw) {
+  let s = String(raw ?? "").trim();
+  if (s && !/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) s = "http://" + s;
+  try {
+    const u = new URL(s);
+    if (!/^https?:$/.test(u.protocol) || !u.hostname) return String(raw ?? "");
+    return (u.origin + u.pathname).replace(/\/+$/, "");
+  } catch { return String(raw ?? ""); }
+}
+
+/** Why `base` can't be loaded, as one sentence, or null when it is an http(s) URL. */
+export function baseUrlProblem(base) {
+  try {
+    const u = new URL(base);
+    if (/^https?:$/.test(u.protocol) && u.hostname) return null;
+  } catch { /* not a URL */ }
+  return `"${base}" isn't a web address. Pass your dev server's address, like --base=http://localhost:3000.`;
 }
 
 /** Coerce `config.groups` into a `(route) => group` function. */
@@ -143,9 +182,19 @@ export async function loadConfig({ cwd = process.cwd(), overrides = {} } = {}) {
   const merged = { ...base, ...fromFile, ...overrides };
   // Env escape hatches (overrides win over env).
   if (!overrides.devBaseUrl && process.env.SCREENMAP_BASE) merged.devBaseUrl = process.env.SCREENMAP_BASE;
+  // Where the dev server's address came from. With none given, the address the last build was
+  // given (--base or SCREENMAP_BASE) carries over, so `open`'s refresh, `recapture` and the next
+  // build load the same app without being told again.
+  merged.devBaseUrlFrom = overrides.devBaseUrl ? "flag" : process.env.SCREENMAP_BASE ? "env" : fromFile.devBaseUrl ? "config" : "default";
+  if (merged.devBaseUrlFrom === "default") {
+    const last = lastBuildBase(root);
+    if (last) { merged.devBaseUrl = last; merged.devBaseUrlFrom = "last build"; }
+  }
   if (!overrides.chrome && (process.env.SCREENMAP_CHROME || process.env.CHROME || process.env.CHROME_PATH)) {
     merged.chrome = process.env.SCREENMAP_CHROME || process.env.CHROME || process.env.CHROME_PATH;
   }
+
+  merged.devBaseUrl = normalizeBaseUrl(merged.devBaseUrl);
 
   // Auto-detect the app dir when not given.
   if (!merged.appDir) merged.appDir = detectAppDir(root);
@@ -160,6 +209,7 @@ export async function loadConfig({ cwd = process.cwd(), overrides = {} } = {}) {
   merged.output = merged.output && typeof merged.output === "object" ? merged.output : { adapter: "markdown" };
   merged.exclude = (Array.isArray(merged.exclude) ? merged.exclude : [merged.exclude]).filter((p) => typeof p === "string" && p);
   merged.crawlCaptureMax = normalizeCount(merged.crawlCaptureMax, base.crawlCaptureMax);
+  merged.colorScheme = merged.colorScheme === "dark" ? "dark" : "light";
 
   return { config: merged, root, file: found ? found.file : null };
 }

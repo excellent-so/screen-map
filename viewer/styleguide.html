@@ -768,7 +768,8 @@ button { font: inherit; }
 .st.on:hover { border-color: var(--color-strong); }
 
 /* --- Header: the lockup, search, the menus, the stats bar --------------------------------------- */
-header { position: relative; z-index: 20; border-bottom: 1px solid var(--color-border); background: var(--color-background); }
+/* Above the drawer (30) and the selection stage (25), so a header menu opens over them. */
+header { position: relative; z-index: 35; border-bottom: 1px solid var(--color-border); background: var(--color-background); }
 .topnav { position: relative; display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 16px; }
 .navsec { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .navsec.left, .navsec.right { flex: 0 0 auto; }
@@ -956,7 +957,7 @@ header { position: relative; z-index: 20; border-bottom: 1px solid var(--color-b
 .rtoolbar .rtsel { display: inline-flex; align-items: center; gap: 8px; color: var(--color-subtle); font-size: var(--text-meta); }
 
 .rboard { display: flex; align-items: flex-start; gap: 16px; min-width: min-content; }
-.rcol { display: flex; flex: 0 0 304px; flex-direction: column; min-height: 120px; border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--color-muted) 55%, var(--color-background)); }
+.rcol { display: flex; flex: 1 0 232px; max-width: 360px; flex-direction: column; min-height: 120px; border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--color-muted) 55%, var(--color-background)); }
 .rcolh { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px; border-bottom: 1px solid var(--color-border); }
 .rcolh .ex-btn { margin-left: auto; }
 .rcolh .hint { flex-basis: 100%; color: var(--color-subtle); font-size: var(--text-2xs); }

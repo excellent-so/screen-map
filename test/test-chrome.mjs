@@ -16,7 +16,9 @@ export async function run() {
   // resolveChrome with a bogus explicit and no download → never throws, never invents a
   // path. On a machine WITH system Chrome it falls through to it (has:true, source:"system");
   // on one WITHOUT, it degrades to has:false/source:null. Both are correct — assert the invariant.
-  const r = await resolveChrome({ explicit: "/nope/chrome", allowDownload: false });
+  const said = [];
+  const r = await resolveChrome({ explicit: "/nope/chrome", allowDownload: false, log: (m) => said.push(m) });
+  ok(said.some((m) => m.includes("No browser at /nope/chrome")), "a SCREENMAP_CHROME or config path with no browser there says so, rather than being ignored");
   if (r.has) {
     ok(r.path && r.path !== "/nope/chrome" && r.source !== null, "resolveChrome falls through bogus explicit to a real system browser");
   } else {

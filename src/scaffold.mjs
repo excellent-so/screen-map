@@ -32,6 +32,9 @@ export default {
   // Screenshots of pages only the crawl finds, nearest "/" first (0 for none).
   // crawlCaptureMax: 100,
 
+  // The theme pages are captured in: "light" or "dark" (fixed, whatever your OS uses).
+  // colorScheme: "light",
+
   // Section taxonomy: a (route) => group function, or a { root: group } map.
   // Default: the first path segment. Uncomment to customize.
   // groups: (route) => route.split("/")[1] || "root",

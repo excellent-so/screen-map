@@ -32,6 +32,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   [github.com/excellent-so/screen-map](https://github.com/excellent-so/screen-map).
 - `npm run test:standalone` checks that the build runs with only HOME, PATH, TMPDIR and LANG set.
 - Code comments say what the code does, without references to internal documents.
+- Screenshots are taken in the light theme, whatever the OS uses (`colorScheme: "dark"` in the config for
+  dark). Headless Chrome followed the system theme, so a Mac in dark mode captured dark screens, and one that
+  turned dark at sunset showed every screen as changed on the next recapture.
+- The address given to a build (`--base` or `SCREENMAP_BASE`) carries over to the commands after it: the
+  viewer's Refresh, `recapture`, `regraph` and the next build. A dev server on another port needs `--base`
+  once. `--base` also takes `localhost:3001` (no `http://`) and a trailing slash.
+- `route` sends only the notes still queued. A note an agent already has stays with the agent, and an
+  approved note stays approved (`route` used to send them again and move them to With agent). `--all` sends
+  every note.
+- `screen-map --version` prints the version, and `screen-map help` lists the flags every command takes
+  (`--base`, `--chrome`, `--app-dir`, `--discovery`, `--framework`, `--output`).
+- `doctor` checks that the dev server answers, and flags an unknown framework and a GitHub output with no
+  token or repo.
+- The npm package leaves out `viewer/styleguide.html` (a page for contributors) and includes this changelog:
+  about 260 KB packed, down from 414 KB.
+- CI runs the tests on Node 20, the lowest version `engines` allows, and on Node 22.
+- The README covers Chrome and `--download-chrome`, the files Screen Map writes, what it sends, how
+  `route` picks notes and the GitHub repo, and how to uninstall.
 
 ### Removed
 
@@ -43,6 +61,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- A plain static site maps every page. The crawl follows relative links (`about.html`, `../`, `./team`) and
+  absolute links to the same site, takes a redirect within the app (`about.html` → `/about` on a server with
+  clean URLs) as the page it lands on rather than a second screen, and loads a folder at the URL it was
+  linked by (`/blog/`), so the folder's relative links resolve as they do in a browser. A site that linked
+  with relative hrefs used to map as `/` alone.
+- A `<link>` in a page's head (a stylesheet, an icon, a preloaded image) is no longer read as a link to a
+  screen, so a fresh `create-next-app` no longer puts `/next.svg` on the board as a dead end. A URL that
+  isn't a page is never a dead end.
+- A build against a dev server that isn't running stops before it starts, with one sentence that says what to
+  do. It used to write a map of failed shots in which every route was a "proven orphan". A crawl that loads
+  no page now proves no orphans, and when no screenshot works (a browser that can't run) the build says what
+  to check and exits 1. When some fail, it lists them.
+- `screen-map <command> --help` prints the help: `build --help` used to run a build. An unknown command
+  exits 1 and says so, where it printed the help and exited 0.
+- Mistakes get one sentence and exit 1, with no stack trace: a config file that doesn't load (named, with
+  the reason), an unknown `framework`, a `--port` or `--server-port` that isn't a number, `regraph` or
+  `recapture` before any build (`regraph` wrote an empty map and exited 0), `recapture` with ids that aren't
+  in the map, and `--download-chrome` without `@puppeteer/browsers`, which now gives the commands that work
+  with npx and in a project. An unexpected error prints its message, and its stack with `SCREENMAP_DEBUG=1`.
+- `route --adapter=github` checks the token and the repo once, before it sends anything, rather than failing
+  note by note and exiting 0. `route` exits 1 when a finding isn't sent, and GitHub's errors read as
+  sentences.
+- `screen-map bug` reads a title and description piped in on two lines, and with nothing on stdin it exits 1
+  and asks for a title. It used to print both prompts and stop, exit 0.
+- `open` on a busy port opens the browser once, on the free port it found; it opened a tab, and printed the
+  URL, once per busy port. On Windows, `open` now opens the browser.
+- `--managed-server` finds the project's own `next` in `node_modules/.bin`, however Screen Map was started
+  (a global install crashed on `spawn next ENOENT`). A server command that isn't installed, stops early or
+  never answers gets one sentence, and Ctrl-C during its first boot stops it.
+- The state sweep reads a query param declared with a string-union type
+  (`searchParams: Promise<{ tab?: Tab }>`) and screenshots each value.
+- Viewer: the header menus open above the review drawer, where in the Review view they were hidden under it.
+  On a phone the Review view shows the pipeline (the drawer covered it), and at 1440px the pipeline's four
+  columns fit beside the drawer. The activity list says "No open notes" rather than "No notes yet" when its
+  filter hides them. A Refresh that captures nothing (the dev server is down) says so and leaves the note
+  where it was.
+- The editor extension's "Build & Open Viewer" starts the viewer after the build finishes, in one terminal,
+  and opens it when it answers. It used to start both at once and open the viewer after 2.5 seconds, before a
+  first build existed. "Open Viewer" waits the same way, and stops a viewer it started earlier.
 - The flow graph no longer draws the crawl's own copy of every link a page's DOM or source already shows, and
   a link many pages share counts as global nav whichever of them found it, so "Show global nav links" hides
   the sidebar's links between columns.

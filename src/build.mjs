@@ -14,6 +14,7 @@ import { resolveScreens } from "./resolve.mjs";
 import { buildGraph } from "./graph.mjs";
 import { captureAll, linksFromCapture } from "./capture.mjs";
 import { screenshot, hasChrome } from "./browser.mjs";
+import { UserError } from "./errors.mjs";
 
 const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const VIEWER_SRC = path.join(PKG_ROOT, "viewer", "index.html");
@@ -24,9 +25,9 @@ function adapterOrThrow() {
   const framework = env().config.framework;
   const adapter = getDiscoveryAdapter(framework);
   if (!adapter) {
-    throw new Error(
-      `Unknown framework "${framework}". Known: next-app-router. ` +
-      `Set \`framework\` in screen-map.config.* (or use discovery:["crawl"] for portability).`,
+    throw new UserError(
+      `Unknown framework "${framework}". Screen Map reads routes from "next-app-router" apps only: ` +
+      `take \`framework\` out of screen-map.config.* and it maps any other app by crawling it.`,
     );
   }
   return adapter;
@@ -98,6 +99,12 @@ function reuseStates(s, prev, SHOTS_DIR) {
   return prev?.states?.length ? prev.states : [];
 }
 
+/** True when a build has written a map to reuse. */
+function hasPriorBuild() {
+  const { BUILDS_DIR, MAP_FILE } = paths();
+  return [path.join(BUILDS_DIR, "prev.json"), MAP_FILE].some((f) => Array.isArray(readJson(f, null)?.screens));
+}
+
 function reuseFromPrev(screens, log2) {
   const { BUILDS_DIR, MAP_FILE, SHOTS_DIR } = paths();
   const pick = (f) => { const p = readJson(f, null); return Array.isArray(p?.screens) ? p : null; };
@@ -153,6 +160,7 @@ async function captureCrawlFound(screens, { max, limitLeft, capture }) {
 // ---- the main build ------------------------------------------------------
 
 export async function runBuild(opts = {}) {
+  if (opts.reuse && !hasPriorBuild()) throw new UserError("No build to regraph yet. Run `screen-map build` first.");
   ensureDirs();
   const { OUT_DIR, BUILDS_DIR, MAP_FILE, NOTES_FILE, LINKS_FILE, HISTORY_DIR } = paths();
   const t0 = Date.now();
@@ -176,7 +184,7 @@ export async function runBuild(opts = {}) {
     concurrency: opts.concurrency || 2, only: opts.only || null, log,
     retryFailed: Boolean(opts.retryFailed),
   };
-  let walkTargets = 0;
+  let walkTargets = 0, captureRan = false;
   let prevProven = [], prevCrawlOnly = [];
   if (opts.reuse) {
     log("• regraph (reuse resolutions + on-disk shots)");
@@ -194,6 +202,7 @@ export async function runBuild(opts = {}) {
       log("• capture");
       const res = await captureAll(screens, { ...capture, force: opts.force, limit: opts.limit || 0 });
       walkTargets = res.screens;
+      captureRan = hasChrome();
     } else {
       log("• capture (skipped)");
       for (const s of screens) if (!s.states || !s.states.length) {
@@ -260,6 +269,8 @@ export async function runBuild(opts = {}) {
       id: buildId,
       generatedAt: new Date().toISOString(),
       devBaseUrl: devBaseUrl(),
+      // Given on the command line (or carried over from a build that was): later commands reuse it.
+      baseGiven: ["flag", "env", "last build"].includes(env().config.devBaseUrlFrom),
       framework: env().config.framework,
       discovery: env().config.discovery,
       routeCount: screens.length,
@@ -304,8 +315,46 @@ export async function runBuild(opts = {}) {
   if (crawlRan) log(`  proven orphans (walk ∖ crawl): ${provenOrphans.length}`);
   if (prev) log(`  diff: +${added.length} new, −${removed.length} removed since last build`);
   log(`  artifact: ${path.relative(process.cwd(), MAP_FILE)}`);
-  log(`  view:     screen-map serve   (then open the printed URL)`);
+  log(`  view:     screen-map open`);
+  if (captureRan) reportFailedShots(screens);
   return map;
+}
+
+/** Why a shot failed, in words. */
+export function shotError(err) {
+  const e = String(err || "");
+  if (e.startsWith("unreachable:")) return `nothing answered at ${devBaseUrl()} (${e.slice("unreachable:".length)})`;
+  if (e === "empty" || e === "no-file") return "Chrome wrote no screenshot";
+  return e || "failed";
+}
+
+/**
+ * After a capture: list the screenshots that failed, and when not one screen got a screenshot,
+ * say what to do and set a failing exit code (the map is still written, without shots).
+ */
+function reportFailedShots(screens) {
+  if (!screens.length) {
+    log("");
+    log(`✗ Nothing to map: no App Router folder (${env().config.appDir}/) here, and the crawl loaded no page from ${devBaseUrl()}/. Run Screen Map in your app's root with its dev server running.`);
+    process.exitCode = 1;
+    return;
+  }
+  const failed = [];
+  for (const s of screens) for (const st of s.states || []) if (st.ok === false && st.state === "default") failed.push([s.route, shotError(st.error)]);
+  if (!failed.length) return;
+  const anyShot = screens.some((s) => (s.states || []).some((x) => x.ok));
+  log("");
+  if (!anyShot) {
+    const unreachable = failed.every(([, why]) => why.startsWith("nothing answered"));
+    log(unreachable
+      ? `✗ No screenshot worked: nothing answered at ${devBaseUrl()}. Start your dev server, or pass --base=<url>, then build again.`
+      : `✗ No screenshot worked (${failed[0][1]}). Check that ${env().chrome?.path || "Chrome"} opens, or point SCREENMAP_CHROME at another Chrome, then build again.`);
+    process.exitCode = 1;
+    return;
+  }
+  log(`⚠ ${failed.length} screenshot${failed.length > 1 ? "s" : ""} failed:`);
+  for (const [route, why] of failed.slice(0, 8)) log(`    ${route}  ${why}`);
+  if (failed.length > 8) log(`    …and ${failed.length - 8} more (each screen's error is in screenmap.json)`);
 }
 
 /** Capture ONLY a declared flow's step screens (e.g. onboarding) into the map. */
@@ -418,6 +467,6 @@ export async function recaptureIds(ids = [], opts = {}) {
   }
   writeJson(MAP_FILE, map);
   const captured = results.filter((r) => r.ok).length;
-  log(`↻ recapture: ${captured}/${ids.length} refreshed (concurrency ${conc}).`);
-  return { ok: true, requested: ids.length, captured, results };
+  if (!opts.quiet) log(`↻ recapture: ${captured}/${ids.length} refreshed (concurrency ${conc}).`);
+  return { ok: true, requested: ids.length, captured, results, base };
 }

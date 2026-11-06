@@ -42,7 +42,8 @@ export function walkCovers(screens, p) {
  *                   `page: false` with the reason as its default state (a stylesheet, a
  *                   feed, an error status, a redirect to another site)
  *  - provenOrphans  walk route ids the crawl never reached (real orphans, not inferred)
- *  - crawlOnly      reached paths matching no walk route (runtime-only routes)
+ *  - crawlOnly      reached paths matching no walk route (runtime-only routes), except paths
+ *                   that only redirect to another page of the app
  *  - crawlEdges     crawl link edges mapped to screen ids (validate the static graph)
  */
 export function unionCrawl(screens, crawlResult) {
@@ -51,6 +52,8 @@ export function unionCrawl(screens, crawlResult) {
   }
   const { reachedPaths, edges } = crawlResult;
   const notPages = crawlResult.notPages || new Map();
+  const redirects = crawlResult.redirects || new Map();
+  const urls = crawlResult.urls || new Map();
 
   // 1. Annotate walk screens with crawl reachability; collect proven orphans.
   const provenOrphans = [];
@@ -62,8 +65,9 @@ export function unionCrawl(screens, crawlResult) {
     }
   }
 
-  // 2. crawl-only routes: reached paths that match no walk screen → synthesized nodes.
-  const crawlOnly = [...reachedPaths].filter((p) => !walkCovers(screens, p));
+  // 2. crawl-only routes: reached paths that match no walk screen → synthesized nodes. A path
+  //    that only redirects within the app isn't a node: the page it lands on is.
+  const crawlOnly = [...reachedPaths].filter((p) => !walkCovers(screens, p) && !redirects.has(p));
   const synthesized = crawlOnly.map((p) => ({
     id: routeId(p),
     route: p,
@@ -72,7 +76,7 @@ export function unionCrawl(screens, crawlResult) {
     dynamic: false,
     params: [],
     capabilities: { hasLoading: false, hasColdStart: false, hasError: false },
-    url: p,
+    url: urls.get(p) || p,
     resolved: true,
     resolveNote: "crawl (runtime-only)",
     states: notPages.has(p) ? [{ state: "default", capture: false, reason: notPages.get(p) }] : [],
@@ -82,12 +86,14 @@ export function unionCrawl(screens, crawlResult) {
   }));
   const allScreens = [...screens, ...synthesized];
 
-  // 3. crawl edges mapped to screen ids (over the full node set).
+  // 3. crawl edges mapped to screen ids (over the full node set); a link to a path that
+  //    redirects counts as a link to where it lands.
   const seen = new Set();
   const crawlEdges = [];
+  const idOf = (p) => matchRouteId(p, allScreens) || (redirects.has(p) ? matchRouteId(redirects.get(p), allScreens) : null);
   for (const e of edges) {
-    const from = matchRouteId(e.fromPath, allScreens);
-    const to = matchRouteId(e.toPath, allScreens);
+    const from = idOf(e.fromPath);
+    const to = idOf(e.toPath);
     if (!from || !to || from === to) continue;
     const key = `${from}|${to}`;
     if (seen.has(key)) continue;

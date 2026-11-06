@@ -76,7 +76,8 @@ export function buildGraph(screens, { staticEdges = [], crawlEdges = [] } = {}) 
   // A screen the crawl reached has a way in by definition, so it is never an orphan.
   const crawled = (s) => Array.isArray(s.discoveredBy) && s.discoveredBy.includes("crawl");
   const orphans = screens.filter((s) => !inbound.has(s.id) && s.id !== "home" && !crawled(s)).map((s) => s.id);
-  const deadEnds = screens.filter((s) => !outbound.has(s.id)).map((s) => s.id);
+  // A URL that isn't a page (a stylesheet, a feed, a 404) has no links to show, so it's no dead end.
+  const deadEnds = screens.filter((s) => !outbound.has(s.id) && s.page !== false).map((s) => s.id);
   for (const e of allEdges) {
     const f = byId.get(e.from), t = byId.get(e.to);
     e.crossGroup = Boolean(f && t && f.group !== t.group);

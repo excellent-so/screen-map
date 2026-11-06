@@ -68,7 +68,7 @@
     }
   },
   "scripts": {
-    "package": "vsce package",
+    "package": "vsce package --no-dependencies",
     "publish:vscode": "vsce publish",
     "publish:openvsx": "ovsx publish"
   },

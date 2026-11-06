@@ -27,9 +27,11 @@ There is nothing to install: Screen Map has no runtime dependencies.
 Run the test suite and confirm it passes:
 
 ```sh
-npm test
+npm test                  # no Chrome needed
+npm run test:standalone   # builds a real map with your Chrome, in a bare environment
 ```
 
-Expected: `screen-map tests: N passed, 0 failed`.
+Expected: `screen-map tests: N passed, 0 failed`, then `screen-map standalone: passed`. CI runs `npm test` on
+Node 20 and 22. If you change the viewer's CSS, run `npm run styleguide` too.
 
 Keep PRs focused — one logical change per PR makes review faster.

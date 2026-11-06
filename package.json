@@ -31,8 +31,9 @@
   "files": [
     "bin/",
     "src/",
-    "viewer/",
+    "viewer/index.html",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {

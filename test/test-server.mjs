@@ -2,7 +2,7 @@
 // in for the user's `next dev`, so this exercises the real boot → ready → teardown
 // lifecycle with no framework or network dependency.
 
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
@@ -76,6 +76,36 @@ export async function run() {
     await new Promise((r) => setTimeout(r, 150));
   }
   ok(freed, `port ${port} freed after stop() — server torn down`);
+
+  // The project's own binaries are found, as under `npm run`: a command that lives only in
+  // node_modules/.bin starts with Screen Map run from anywhere.
+  const binDir = path.join(dir, "node_modules", ".bin");
+  mkdirSync(binDir, { recursive: true });
+  const localBin = path.join(binDir, "my-dev-server");
+  writeFileSync(localBin, `#!${process.execPath}\n` + STUB, { mode: 0o755 });
+  let local = null;
+  try {
+    local = await startManagedServer({ root: dir, server: { command: "my-dev-server", portFlag: null, portBase: 4960, readyTimeoutMs: 15000, watchdog: false } });
+    eq(await (await fetch(local.base + "/")).text(), "ok", "a command in the project's node_modules/.bin starts");
+  } catch (e) {
+    ok(false, `a command in the project's node_modules/.bin starts (${e.message})`);
+  } finally {
+    if (local) await local.stop();
+  }
+
+  // A command that isn't installed fails fast, in one sentence.
+  const t0 = Date.now();
+  let err = null;
+  try { await startManagedServer({ root: dir, server: { command: "no-such-dev-server dev", portBase: 4990, readyTimeoutMs: 60000, watchdog: false } }); }
+  catch (e) { err = e; }
+  ok(err && err.name === "UserError" && err.message.includes("`no-such-dev-server` isn't installed in this project"), `a missing server command says so (${err && err.message})`);
+  ok(Date.now() - t0 < 15000, "…without waiting out the ready timeout");
+
+  // A command that exits before it answers says so.
+  let exitErr = null;
+  try { await startManagedServer({ root: dir, server: { command: ["node", "-e", "process.exit(3)"], portFlag: null, portBase: 4995, readyTimeoutMs: 60000, watchdog: false } }); }
+  catch (e) { exitErr = e; }
+  ok(exitErr && /stopped \(exit 3\) before it answered/.test(exitErr.message), `a server that exits early says so (${exitErr && exitErr.message})`);
 
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* */ }
 }

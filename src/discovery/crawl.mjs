@@ -16,13 +16,19 @@
 
 import { dumpDom, hasChrome, warmFetch } from "../browser.mjs";
 import { devBaseUrl } from "../env.mjs";
-import { extractHrefs, normalizePath, patternToRegex } from "../lib.mjs";
+import { extractLinks, normalizePath, patternToRegex } from "../lib.mjs";
 
 /**
  * BFS the running server from `/`, following internal links. Returns:
- *   { reachedPaths: Set<string>, notPages: Map<string, string>, edges: [{ fromPath, toPath }], pageCount }
+ *   { reachedPaths: Set<string>, notPages: Map<string, string>, redirects: Map<string, string>,
+ *     urls: Map<string, string>, edges: [{ fromPath, toPath }], pageCount, ran }
  *
  * `notPages` maps each reached path that isn't an HTML page of the app to the reason.
+ * `redirects` maps a path that redirects within the app to where it lands ("/about.html" →
+ * "/about" on a server with clean URLs); the crawl follows it and maps the page it lands on.
+ * `urls` keeps each reached path as it was linked when that differs ("/blog" → "/blog/"),
+ * so a directory's relative links resolve the way they do in a browser.
+ * `ran` is false when not even one page loaded: a crawl that reached nothing proves nothing.
  *
  * @param {object} [opts]
  * @param {number} [opts.maxPages]  crawl budget (default 200)
@@ -30,43 +36,73 @@ import { extractHrefs, normalizePath, patternToRegex } from "../lib.mjs";
  */
 export async function crawl(opts = {}) {
   const { maxPages = 200, log = () => {} } = opts;
+  const empty = { reachedPaths: new Set(), notPages: new Map(), redirects: new Map(), urls: new Map(), edges: [], pageCount: 0, ran: false };
   if (!hasChrome()) {
     log("crawl: no Chrome — skipping (proven-orphan report unavailable this run).");
-    return { reachedPaths: new Set(), notPages: new Map(), edges: [], pageCount: 0, ran: false };
+    return empty;
   }
   const base = devBaseUrl();
-  const seed = "/";
-  const queue = [seed];
-  const visited = new Set([seed]);
+  const queue = [{ path: "/", href: "/" }];
+  const visited = new Set(["/"]);
   const reachedPaths = new Set(); // pages that actually loaded
   const notPages = new Map(); // reached, but not an HTML page of the app → why
+  const redirects = new Map(); // requested path → the path in the app it redirects to
+  const urls = new Map(); // reached path → its pathname as linked, when that differs
   const edges = [];
   let pageCount = 0;
 
   while (queue.length && pageCount < maxPages) {
-    const p = queue.shift();
-    let dom = "";
+    const { path: p, href } = queue.shift();
     // Fetch first (this also warms a dev server's compile) to see what the URL serves.
-    const res = await warmFetch(base + p);
-    try { dom = await dumpDom(base + p, { profile: "crawl", virtualTime: 6000, warm: false }); } catch { /* unreachable */ }
+    const res = await warmFetch(base + href);
     pageCount++;
+    let at = p, atHref = href;
+    const landed = pathInApp(res, base);
+    if (landed && landed.path !== p) {
+      // A redirect within the app: the page is where it lands.
+      redirects.set(p, landed.path);
+      if (res.status < 400) reachedPaths.add(p);
+      if (visited.has(landed.path)) continue; // that page is crawled on its own
+      visited.add(landed.path);
+      at = landed.path;
+    }
+    if (landed) atHref = landed.href;
+    let dom = "";
+    try { dom = await dumpDom(base + atHref, { profile: "crawl", virtualTime: 6000, warm: false }); } catch { /* unreachable */ }
     if (!dom) continue;
-    reachedPaths.add(p);
+    reachedPaths.add(at);
+    if (atHref !== at) urls.set(at, atHref);
     const why = notAPage(res, base);
-    if (why) notPages.set(p, why);
-    for (const raw of extractHrefs(dom)) {
-      const to = normalizePath(raw);
-      if (!to) continue;
-      edges.push({ fromPath: p, toPath: to });
-      if (!visited.has(to) && queue.length + visited.size < maxPages * 2) {
-        visited.add(to);
-        queue.push(to);
+    if (why) notPages.set(at, why);
+    for (const link of extractLinks(dom, (res.ok && res.finalUrl) || base + atHref)) {
+      edges.push({ fromPath: at, toPath: link.path });
+      if (!visited.has(link.path) && queue.length + visited.size < maxPages * 2) {
+        visited.add(link.path);
+        queue.push(link);
       }
     }
-    if (pageCount % 10 === 0) log(`crawl: ${pageCount} pages · ${reachedPaths.size} reached`);
+    if (pageCount % 10 === 0) log(`crawl: ${pageCount} pages · ${pagesIn(reachedPaths, redirects)} reached`);
   }
-  log(`crawl: done — ${pageCount} pages fetched, ${reachedPaths.size} reached, ${edges.length} link edges.`);
-  return { reachedPaths, notPages, edges, pageCount, ran: true };
+  if (!reachedPaths.size) {
+    log(`crawl: no page loaded from ${base}/ — skipping the proven-orphan report this run.`);
+    return { ...empty, pageCount };
+  }
+  log(`crawl: done — ${pageCount} pages fetched, ${pagesIn(reachedPaths, redirects)} reached, ${edges.length} link edges.`);
+  return { reachedPaths, notPages, redirects, urls, edges, pageCount, ran: true };
+}
+
+/** How many reached paths are pages, not a path that redirects to one. */
+const pagesIn = (reached, redirects) => [...reached].filter((p) => !redirects.has(p)).length;
+
+/** Where a fetch landed, when that is in the app (same origin): { path, href }, else null. */
+function pathInApp(res, base) {
+  if (!res || !res.ok || !res.finalUrl) return null;
+  try {
+    const to = new URL(res.finalUrl);
+    if (to.origin !== new URL(base).origin) return null;
+    const p = normalizePath(to.pathname);
+    return p ? { path: p, href: to.pathname } : null;
+  } catch { return null; }
 }
 
 /**

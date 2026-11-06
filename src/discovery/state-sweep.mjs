@@ -188,10 +188,13 @@ function looksNumeric(src, param) {
 export function inferDomain(param, src, { dynamic = false } = {}) {
   const ip = "initial" + cap(param); // page → client prop naming echo (initialMode ← mode)
 
-  // (a) String-union TS type linked to the param (a tour's `mode`: type Mode).
+  // (a) String-union TS type linked to the param (a tour's `mode`: type Mode): the param is
+  //     declared with that type (`searchParams: Promise<{ tab?: Tab }>`), or compared to one of
+  //     its values, or seeds a useState of it.
   const unions = unionTypes(src);
-  for (const [, vals] of Object.entries(unions)) {
-    const linked = vals.some((v) =>
+  for (const [typeName, vals] of Object.entries(unions)) {
+    const typed = new RegExp(`\\b(?:${esc(param)}|${esc(ip)})\\s*\\??\\s*:\\s*${esc(typeName)}\\b`).test(src);
+    const linked = typed || vals.some((v) =>
       new RegExp(`(?:${esc(param)}|${esc(ip)})\\s*===?\\s*["'\`]${esc(v)}["'\`]`).test(src) ||
       new RegExp(`useState\\s*<[^>]*>\\s*\\(\\s*(?:${esc(param)}|${esc(ip)})\\b`).test(src),
     );

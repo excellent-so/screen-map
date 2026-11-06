@@ -76,7 +76,7 @@ function statesFor(screen, wanted) {
 export function linksFromCapture(s, res) {
   const finalPath = normalizePath(res.finalUrl), reqPath = normalizePath(s.url);
   if (finalPath && finalPath !== reqPath) { s.redirectTo = finalPath; s.outLinks = []; }
-  else { s.outLinks = extractHrefs(res.dom); s.redirectTo = null; }
+  else { s.outLinks = extractHrefs(res.dom, res.finalUrl); s.redirectTo = null; }
 }
 
 export async function captureAll(screens, opts = {}) {

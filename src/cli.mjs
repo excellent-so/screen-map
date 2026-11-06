@@ -4,12 +4,15 @@ import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { loadConfig } from "./config.mjs";
+import { loadConfig, baseUrlProblem } from "./config.mjs";
 import { initEnv, paths } from "./env.mjs";
 import { resolveChrome, missingBrowserMessage } from "./chrome.mjs";
+import { answers } from "./browser.mjs";
 import { readJson, writeJson } from "./lib.mjs";
 import { buildBugReport, bugIssueUrl } from "./bug-report.mjs";
 import { scaffoldConfig } from "./scaffold.mjs";
+import { UserError } from "./errors.mjs";
+import { VERSION } from "./meta.mjs";
 
 const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -23,9 +26,27 @@ function parseFlags(argv) {
   return { f, positionals };
 }
 
-function resolvePort(v) {
-  const n = Number(v);
-  return Number.isFinite(n) && n > 0 && n < 65536 ? Math.floor(n) : 4610;
+const COMMANDS = new Set(["build", "regraph", "capture-flow", "recapture", "serve", "open", "diff", "route", "init", "doctor", "bug"]);
+
+/** A port number from a flag, or a UserError naming the flag. Absent → `dflt`. */
+function portFlag(f, name, dflt) {
+  if (f[name] === undefined) return dflt;
+  const n = typeof f[name] === "string" && f[name].trim() ? Number(f[name]) : NaN;
+  if (Number.isInteger(n) && n > 0 && n < 65536) return n;
+  throw new UserError(`--${name} needs a port number, like --${name}=4610.`);
+}
+
+/**
+ * Check the dev server answers before a capture, so a build against a server that isn't running
+ * stops with one sentence instead of mapping every screen as a failed shot. Any HTTP answer counts.
+ */
+async function requireServer(config) {
+  const base = config.devBaseUrl;
+  const problem = baseUrlProblem(base);
+  if (problem) throw new UserError(problem);
+  if (!(await answers(base + "/", 60000))) {
+    throw new UserError(`Nothing answered at ${base}. Start your dev server (for example \`npm run dev\`), or pass its address with --base=<url>.`);
+  }
 }
 
 /** Build config overrides from common CLI flags. */
@@ -52,7 +73,7 @@ async function setup(f, { needChrome = false, allowDownload = false } = {}) {
     if (!chrome.has) { console.error("\n" + missingBrowserMessage() + "\n"); process.exit(1); }
   } else {
     // Best-effort detection so `doctor` and the map can report it, but don't require it.
-    try { chrome = await resolveChrome({ explicit: config.chrome, allowDownload: false }); } catch { /* ignore */ }
+    try { chrome = await resolveChrome({ explicit: config.chrome, allowDownload: false, log: () => {} }); } catch { /* ignore */ }
   }
   initEnv({ root, config, chrome });
   return { config, root, file, chrome };
@@ -67,21 +88,27 @@ async function maybeStartManaged(config, root, f) {
   const wanted = f["managed-server"] || (config.server && config.server.autostart);
   if (!wanted) return null;
   if (!config.server || !config.server.command) {
-    console.error("--managed-server needs a `server` block in screen-map.config.* (at least `command`).");
-    process.exit(1);
+    throw new UserError("--managed-server needs a `server` block in screen-map.config.* with at least a `command`, like server: { command: \"next dev\" }.");
   }
   const server = { ...config.server };
-  if (f["server-port"]) server.port = resolvePort(f["server-port"]);
+  if (f["server-port"]) server.port = portFlag(f, "server-port");
   if (f["no-watchdog"]) server.watchdog = false;
   const { startManagedServer } = await import("./server.mjs");
   const managed = await startManagedServer({ server, root, log: (m) => console.log(m) });
   config.devBaseUrl = managed.base; // env holds this same config ref → devBaseUrl() follows
+  config.devBaseUrlFrom = "managed"; // gone after the run: never carried over to the next command
   return managed;
 }
 
 async function main() {
   const [cmd = "help", ...rest] = process.argv.slice(2);
-  const { f, positionals } = parseFlags(rest);
+  const { f } = parseFlags(rest);
+
+  if (["help", "--help", "-h"].includes(cmd)) { printHelp(); return; }
+  if (["version", "--version", "-v"].includes(cmd)) { console.log(VERSION); return; }
+  if (!COMMANDS.has(cmd)) throw new UserError(`Unknown command "${cmd}". Run \`screen-map help\` for the list.`);
+  // `screen-map build --help` asks for help; it must never start a build.
+  if (f.help || rest.includes("-h")) { printHelp(); return; }
 
   switch (cmd) {
     case "build": {
@@ -89,6 +116,7 @@ async function main() {
       const { config, root } = await setup(f, { needChrome, allowDownload: Boolean(f["download-chrome"]) });
       const managed = await maybeStartManaged(config, root, f);
       try {
+        if (needChrome) await requireServer(config);
         const { runBuild } = await import("./build.mjs");
         await runBuild({
           force: Boolean(f.force),
@@ -120,6 +148,7 @@ async function main() {
       const { config, root } = await setup(f, { needChrome: true, allowDownload: Boolean(f["download-chrome"]) });
       const managed = await maybeStartManaged(config, root, f);
       try {
+        await requireServer(config);
         const { captureFlow } = await import("./build.mjs");
         await captureFlow({ id: f.id ? String(f.id) : "onboarding", force: Boolean(f.force), concurrency: f.concurrency ? Number(f.concurrency) : 2 });
       } finally {
@@ -128,82 +157,108 @@ async function main() {
       break;
     }
     case "recapture": {
-      await setup(f, { needChrome: true, allowDownload: Boolean(f["download-chrome"]) });
-      const { recaptureIds } = await import("./build.mjs");
       const ids = f.ids ? String(f.ids).split(",").map((s) => s.trim()).filter(Boolean) : [];
-      if (!ids.length) { console.error("recapture needs --ids=id1,id2 (screen ids from screenmap.json)"); process.exit(1); }
-      const r = await recaptureIds(ids, { concurrency: f.concurrency ? Number(f.concurrency) : 2 });
-      if (!r.ok) { console.error(`recapture failed: ${r.error}`); process.exit(1); }
-      console.log(`↻ recaptured ${r.captured}/${r.requested}. Reload the viewer to see the refreshed screens.`);
+      if (!ids.length) throw new UserError("recapture needs the screens to take again: --ids=id1,id2 (each screen's id is in .screenmap/screenmap.json, and in the viewer's copied command).");
+      const { config } = await setup(f, { needChrome: true, allowDownload: Boolean(f["download-chrome"]) });
+      if (!readJson(paths().MAP_FILE, null)) throw new UserError("No build yet. Run `screen-map build` first.");
+      await requireServer(config);
+      const { recaptureIds, shotError } = await import("./build.mjs");
+      const r = await recaptureIds(ids, { concurrency: f.concurrency ? Number(f.concurrency) : 2, quiet: true });
+      if (!r.ok) throw new UserError("No build yet. Run `screen-map build` first.");
+      const notInMap = r.results.filter((x) => x.error === "unresolved").map((x) => x.id);
+      if (notInMap.length) console.error(`Not screens of this map: ${notInMap.join(", ")}. Each screen's id is in .screenmap/screenmap.json.`);
+      for (const x of r.results) if (!x.ok && x.error !== "unresolved") console.error(`  ${x.route || x.id}: ${shotError(x.error)}`);
+      console.log(`↻ recaptured ${r.captured}/${r.requested}.${r.captured ? " Reload the viewer to see the refreshed screens." : ""}`);
+      if (r.captured < r.requested) process.exitCode = 1;
       break;
     }
     case "serve":
     case "open": {
       await setup(f, { needChrome: false });
       const { serve } = await import("./serve.mjs");
-      serve({ port: resolvePort(f.port), open: cmd === "open" });
+      serve({ port: portFlag(f, "port", 4610), open: cmd === "open" });
       break;
     }
     case "diff": {
       await setup(f, { needChrome: false });
       const { MAP_FILE, BUILDS_DIR } = paths();
       const map = readJson(MAP_FILE, null);
-      if (!map) { console.error("No build yet. Run `screen-map build`."); process.exit(1); }
+      if (!map) throw new UserError("No build yet. Run `screen-map build` first.");
       console.log(`Latest build ${map.build.id}`);
       console.log(`  screens: ${map.build.routeCount} · resolved ${map.build.resolvedCount} · captured ${map.build.capturedCount}`);
-      console.log(`  +${map.diff.added.length} new: ${map.diff.added.slice(0, 20).join(", ")}${map.diff.added.length > 20 ? "…" : ""}`);
-      console.log(`  −${map.diff.removed.length} removed: ${map.diff.removed.slice(0, 20).join(", ")}`);
+      const list = (ids) => (ids.length ? `: ${ids.slice(0, 20).join(", ")}${ids.length > 20 ? "…" : ""}` : "");
+      console.log(`  +${map.diff.added.length} new${list(map.diff.added)}`);
+      console.log(`  −${map.diff.removed.length} removed${list(map.diff.removed)}`);
+      if (!map.diff.hadPrevious) console.log("  (the first build: nothing to compare with yet)");
       if (map.crawlRan) console.log(`  proven orphans (walk ∖ crawl): ${(map.provenOrphans || []).length}`);
       break;
     }
     case "route": {
       await setup(f, { needChrome: false });
-      const { sendFinding, adapterProblem, chosenAdapter } = await import("./output/index.mjs");
+      const { sendFinding, adapterProblem, adapterNotReady, chosenAdapter } = await import("./output/index.mjs");
       const adapter = f.adapter ? String(f.adapter) : undefined;
-      const problem = f["dry-run"] ? null : adapterProblem(chosenAdapter({ adapter }));
-      if (problem) { console.error(problem); process.exit(1); }
+      const name = chosenAdapter({ adapter });
+      const problem = f["dry-run"] ? null : adapterProblem(name);
+      if (problem) throw new UserError(problem);
       const { MAP_FILE, NOTES_FILE } = paths();
       const map = readJson(MAP_FILE, null);
-      if (!map) { console.error("No build yet. Run `screen-map build`."); process.exit(1); }
+      if (!map) throw new UserError("No build yet. Run `screen-map build` first.");
       const nf = readJson(NOTES_FILE, { notes: [] });
       let notes = nf.notes || [];
+      // By default, only the notes still queued: one the viewer has handed to an agent, or approved,
+      // isn't routed again (pass --all, or --note=<id>).
       if (f.note) notes = notes.filter((n) => n.id === String(f.note));
-      else if (!f.all) notes = notes.filter((n) => n.status !== "sent");
-      if (!notes.length) { console.log("No notes to route (use --all to include already-sent notes, or leave a note in the viewer first)."); break; }
-      const { buildFinding } = await import("./finding.mjs");
+      else if (!f.all) notes = notes.filter((n) => (!n.status || n.status === "queued") && !n.routedTo);
+      if (!notes.length) {
+        console.log(f.note ? `No note with id ${f.note}.` : "No queued notes to route. Leave a note in the viewer and choose Queue for later, or pass --all to route every note.");
+        if (f.note) process.exitCode = 1;
+        break;
+      }
+      const notReady = f["dry-run"] ? null : adapterNotReady(name);
+      if (notReady) throw new UserError(notReady);
+      const { buildFinding, findingMarkdown } = await import("./finding.mjs");
       let sent = 0;
       for (const note of notes) {
         const finding = buildFinding(note, map);
-        if (f["dry-run"]) { const { findingMarkdown } = await import("./finding.mjs"); console.log(findingMarkdown(finding)); continue; }
+        if (f["dry-run"]) { console.log(findingMarkdown(finding)); continue; }
         const out = await sendFinding(finding, adapter ? { adapter } : {});
-        if (out.ok) { sent++; note.status = "sent"; note.routedTo = { adapter: adapter || (map.build && "configured"), ref: out.ref, url: out.url, at: new Date().toISOString() }; console.log(`✓ routed ${finding.id} → ${out.ref || "ok"}${out.url ? " " + out.url : ""}`); }
-        else { console.error(`✗ ${finding.id}: ${out.error}${out.message ? " — " + out.message : ""}`); }
+        if (out.ok) { sent++; note.status = "sent"; note.routedTo = { adapter: name, ref: out.ref, url: out.url, at: new Date().toISOString() }; console.log(`✓ routed ${finding.id} → ${out.ref || "ok"}${out.url ? " " + out.url : ""}`); }
+        else { console.error(`✗ ${finding.id}: ${out.message || out.error}`); }
       }
-      if (!f["dry-run"] && sent) { writeJson(NOTES_FILE, { ...nf, notes: nf.notes }); console.log(`\nRouted ${sent}/${notes.length} finding(s).`); }
+      if (f["dry-run"]) break;
+      if (sent) { writeJson(NOTES_FILE, { ...nf, notes: nf.notes }); console.log(`\nRouted ${sent}/${notes.length} finding(s).`); }
+      if (sent < notes.length) process.exitCode = 1;
       break;
     }
     case "init": {
       const { config } = await setup(f, { needChrome: false });
       const target = path.join(process.cwd(), "screen-map.config.mjs");
-      if (fs.existsSync(target) && !f.force) { console.error(`${target} already exists (pass --force to overwrite).`); process.exit(1); }
+      if (fs.existsSync(target) && !f.force) throw new UserError(`${path.relative(process.cwd(), target)} already exists. Edit it, or pass --force to write a fresh one over it.`);
       fs.writeFileSync(target, scaffoldConfig(config));
       console.log(`✓ wrote ${path.relative(process.cwd(), target)}\n  Edit it, then run: screen-map build`);
       break;
     }
     case "doctor": {
       const { config, root, file, chrome } = await setup(f, { needChrome: false });
-      const { listOutputAdapters, adapterProblem } = await import("./output/index.mjs");
-      const outputProblem = adapterProblem(config.output.adapter || "markdown");
+      const { listOutputAdapters, adapterProblem, adapterNotReady } = await import("./output/index.mjs");
+      const { getDiscoveryAdapter } = await import("./discovery/index.mjs");
+      const outName = config.output.adapter || "markdown";
+      const outputProblem = adapterProblem(outName) || adapterNotReady(outName);
+      const appDirFound = fs.existsSync(path.join(root, config.appDir));
+      const baseProblem = baseUrlProblem(config.devBaseUrl);
+      const serverUp = !baseProblem && await answers(config.devBaseUrl + "/", 5000);
+      const knownFramework = Boolean(getDiscoveryAdapter(config.framework));
+      const explicitMissing = config.chrome && !fs.existsSync(config.chrome);
       console.log("Screen Map — doctor\n");
       console.log(`  root:        ${root}`);
       console.log(`  config:      ${file || "(none — using zero-config defaults)"}`);
-      console.log(`  appDir:      ${config.appDir}  ${fs.existsSync(path.join(root, config.appDir)) ? "✓" : "✗ (not found)"}`);
-      console.log(`  devBaseUrl:  ${config.devBaseUrl}`);
+      console.log(`  appDir:      ${config.appDir}  ${appDirFound ? "✓" : "— not found: the map will be what the crawl reaches from /"}`);
+      console.log(`  devBaseUrl:  ${config.devBaseUrl}${config.devBaseUrlFrom === "last build" ? " (the last build's)" : ""}  ${baseProblem ? `✗ ${baseProblem}` : serverUp ? "✓ answering" : config.server && config.server.command ? "— not answering (a managed server starts its own)" : "✗ nothing answering: start your dev server, or pass --base=<url>"}`);
       console.log(`  server:      ${config.server && config.server.command ? `managed (${Array.isArray(config.server.command) ? config.server.command.join(" ") : config.server.command})${config.server.autostart ? " · autostart" : " · via --managed-server"}` : "— (capture against devBaseUrl; add a `server` block to self-host one)"}`);
-      console.log(`  framework:   ${config.framework}`);
+      console.log(`  framework:   ${config.framework}${knownFramework ? "" : `  ✗ unknown: take \`framework\` out of the config`}`);
       console.log(`  discovery:   ${config.discovery.join(" ∪ ")}`);
-      console.log(`  chrome:      ${chrome.has ? `${chrome.path} (${chrome.source})` : "✗ not found — run `build --download-chrome` or set SCREENMAP_CHROME"}`);
-      console.log(`  output:      ${config.output.adapter || "markdown"}  ${outputProblem ? `✗ ${outputProblem}` : `(available: ${listOutputAdapters().join(", ")})`}`);
+      console.log(`  chrome:      ${chrome.has ? `${chrome.path} (${chrome.source})${explicitMissing ? `  (no browser at ${config.chrome})` : ""}` : "✗ not found: install Google Chrome, or set SCREENMAP_CHROME to a Chrome-family browser"}`);
+      console.log(`  output:      ${outName}  ${outputProblem ? `✗ ${outputProblem}` : `(available: ${listOutputAdapters().join(", ")})`}`);
       console.log(`  github:      ${process.env.GITHUB_TOKEN || process.env.GH_TOKEN ? "✓ GITHUB_TOKEN set" : "— (set GITHUB_TOKEN to open issues)"}`);
       break;
     }
@@ -216,9 +271,25 @@ async function main() {
   }
 }
 
-/** Ask a single line on stdin. */
-function ask(rl, question) {
-  return new Promise((resolve) => rl.question(question, (answer) => resolve(answer)));
+/**
+ * Ask questions one line at a time on stdin. Lines piped in all at once are kept for the
+ * questions that follow, and a closed stdin answers "" rather than leaving the command hanging.
+ */
+function lineAsker() {
+  const rl = readline.createInterface({ input: process.stdin, terminal: false });
+  const lines = [], waiting = [];
+  let closed = false;
+  rl.on("line", (l) => { const w = waiting.shift(); if (w) w(l); else lines.push(l); });
+  rl.on("close", () => { closed = true; for (const w of waiting.splice(0)) w(""); });
+  return {
+    ask(question) {
+      process.stdout.write(question);
+      if (lines.length) { const l = lines.shift(); if (!process.stdin.isTTY) process.stdout.write(l + "\n"); return Promise.resolve(l); }
+      if (closed) { process.stdout.write("\n"); return Promise.resolve(""); }
+      return new Promise((resolve) => waiting.push((l) => { if (!process.stdin.isTTY) process.stdout.write(l + "\n"); resolve(l); }));
+    },
+    close() { rl.close(); },
+  };
 }
 
 /** Flags for `bug` only: unlike parseFlags() (which requires `--flag=value`), this
@@ -246,22 +317,21 @@ async function runBug(argv) {
 
   const severity = f.severity ? String(f.severity) : undefined;
   if (severity && !["low", "medium", "high"].includes(severity)) {
-    console.error(`Unknown --severity "${severity}". Use low, medium, or high.`);
-    process.exit(1);
+    throw new UserError(`Unknown --severity "${severity}". Use low, medium, or high.`);
   }
 
   let title = f.title ? String(f.title) : "";
   let description = f.description ? String(f.description) : "";
   if (!title || !description) {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const asker = lineAsker();
     try {
-      if (!title) title = (await ask(rl, "Bug title: ")).trim();
-      if (!description) description = (await ask(rl, "Description (what happened, what you expected): ")).trim();
+      if (!title) title = (await asker.ask("Bug title: ")).trim();
+      if (title && !description) description = (await asker.ask("Description (what happened, what you expected): ")).trim();
     } finally {
-      rl.close();
+      asker.close();
     }
   }
-  if (!title) { console.error("A title is required."); process.exit(1); }
+  if (!title) throw new UserError("A bug report needs a title: type one at the prompt, or pass --title=<text>.");
 
   const report = buildBugReport({
     product: "screen-map",
@@ -308,7 +378,7 @@ function printHelp() {
       --no-watchdog        (with --managed-server) don't auto-restart a wedged server
       --no-retry           (with --managed-server) skip the retry pass for failed shots
       --retry-failed       retry failed shots once (implied by --managed-server)
-      --download-chrome    fetch Chrome on demand if none is found (never a hidden postinstall)
+      --download-chrome    fetch Chrome on demand if none is found (needs @puppeteer/browsers)
 
   screen-map regraph     fast Chrome-free rebuild — reuse the last build's resolutions + shots
   screen-map capture-flow --id=<flow>   capture a declared flow's steps (dev preview)
@@ -320,7 +390,7 @@ function printHelp() {
 
   screen-map route       turn review notes into tracked work via an output adapter
       --adapter=markdown|github   (default: config.output.adapter)
-      --all               include already-sent notes    --note=<id>  a single note
+      --all               every note, not only the queued ones    --note=<id>  one note
       --dry-run           print the findings without sending
 
   screen-map diff        what changed since the last build
@@ -333,10 +403,26 @@ function printHelp() {
       --description=<text>  skip the description prompt
       --severity=low|medium|high
 
+  Flags for any command:
+      --base=<url>         your dev server (default http://localhost:3000, or SCREENMAP_BASE)
+      --app-dir=<dir>      the App Router folder (default: app, else src/app)
+      --chrome=<path>      the browser to screenshot with (or SCREENMAP_CHROME)
+      --discovery=a,b      router-walk and/or crawl (default both)
+      --framework=<name>   the discovery adapter (default next-app-router)
+      --output=<adapter>   where findings go: markdown or github
+
+  screen-map help         this help (also --help, -h, and after any command)
+  screen-map --version    the installed version
+
   Zero-config on a standard Next.js App Router app. Other apps get the crawl only: the
   pages reachable by links from /, with screenshots, but no orphan report.
   Config: screen-map.config.{mjs,js,json}. Output lives in .screenmap/ (gitignore it).
   Requires your dev server running (or a \`server\` block and --managed-server).`);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => {
+  if (e instanceof UserError) console.error(e.message);
+  else if (process.env.SCREENMAP_DEBUG) console.error(e);
+  else console.error(`screen-map: ${(e && e.message) || e}\n(Run again with SCREENMAP_DEBUG=1 for the details. If it looks like a bug in Screen Map, \`screen-map bug\` reports it.)`);
+  process.exit(1);
+});

@@ -162,9 +162,10 @@ export async function run() {
   // URLs the crawl reaches that aren't pages get no screenshot, and say why.
   const elsewhere = await serveRoutes({ "/": htmlPage("<h1>Another site</h1>") });
   const small = await serveRoutes({
-    "/": htmlPage('<link rel="stylesheet" href="/site.css"><a href="/pricing">Pricing</a> <a href="/gone">Gone</a> <a href="/out">Out</a>'),
+    "/": htmlPage('<link rel="stylesheet" href="/theme.css"><link rel="preload" as="image" href="/logo.svg"><a href="/site.css">Styles</a> <a href="/pricing">Pricing</a> <a href="/gone">Gone</a> <a href="/out">Out</a>'),
     "/pricing": htmlPage('<h1>Pricing</h1><a href="/">Home</a>'),
     "/site.css": (_req, res) => { res.writeHead(200, { "content-type": "text/css" }); res.end("body { color: black }"); },
+    "/theme.css": (_req, res) => { res.writeHead(200, { "content-type": "text/css" }); res.end("body { color: black }"); },
     "/out": (_req, res) => { res.writeHead(302, { location: elsewhere.base + "/" }); res.end(); },
   });
   try {
@@ -179,7 +180,9 @@ export async function run() {
       ok(scr && scr.page === false && !shotOf(scr), `small site: ${route} is on the map with no screenshot`);
       eq((scr?.states || [])[0]?.reason, reason, `small site: ${route} says why`);
       ok(!fs.existsSync(path.join(dir, ".screenmap", "shots", `${scr?.id}.default.png`)), `small site: no shot file was written for ${route}`);
+      excludes(s.map?.deadEnds, scr?.id, `small site: ${route}, not a page, is not a dead end`);
     }
+    for (const asset of ["/theme.css", "/logo.svg"]) ok(!byRoute(s.map, asset), `small site: a <link> in the head (${asset}) is not a link to a screen`);
   } finally {
     await small.close();
     await elsewhere.close();

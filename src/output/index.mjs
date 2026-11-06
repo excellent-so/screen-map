@@ -32,6 +32,17 @@ export function adapterProblem(name) {
   return `Unknown output adapter "${name}". Use ${known}.`;
 }
 
+/**
+ * The one-line reason the adapter `name` can't send yet (a missing token, no repo to open issues
+ * on), or null when it is ready. Checked once before routing, rather than failing note by note.
+ */
+export function adapterNotReady(name) {
+  const adapter = getOutputAdapter(name);
+  if (!adapter || typeof adapter.notReady !== "function") return null;
+  const outCfg = cfg().output || {};
+  return adapter.notReady(typeof outCfg[name] === "object" ? outCfg[name] : {});
+}
+
 /** The adapter a send will use: the named one, else config.output.adapter, else markdown. */
 export function chosenAdapter(opts = {}) {
   const outCfg = cfg().output || {};

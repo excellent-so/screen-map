@@ -31,6 +31,9 @@ export async function run() {
   // ── inferDomain: one per strategy ───────────────────────────────────────
   const modeSrc = `type Mode = "slideshow" | "tour"; const [mode] = useState<Mode>(initialMode === "tour" ? "tour" : "slideshow");`;
   eq(inferDomain("mode", modeSrc), { kind: "enum", values: ["slideshow", "tour"], via: "union-type" }, "inferDomain: union-type linked to param");
+  const typedSrc = `type Tab = "profile" | "billing" | "team";\nexport default async function P({ searchParams }: { searchParams: Promise<{ tab?: Tab }> }) {\n  const { tab = "profile" } = await searchParams;\n  return tab;\n}`;
+  eq(inferDomain("tab", typedSrc), { kind: "enum", values: ["profile", "billing", "team"], via: "union-type" }, "inferDomain: a param declared with a string-union type takes its values");
+  ok(inferDomain("q", `type Tab = "a" | "b";\nconst x: { q?: string } = {};`) === null, "inferDomain: a union type the param isn't declared with doesn't count");
 
   const incSrc = `const VALID_STEPS = ["a", "b", "c"]; if (!VALID_STEPS.includes(step)) notFound();`;
   eq(inferDomain("step", incSrc, { dynamic: true }), { kind: "enum", values: ["a", "b", "c"], via: "includes-array" }, "inferDomain: ARR.includes(param)");

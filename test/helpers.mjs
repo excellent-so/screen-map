@@ -75,10 +75,12 @@ export function writeFakeChrome(dir) {
   return file;
 }
 
-/** Run `screen-map <args>` in `cwd`; resolves to { code, log, map } (map: .screenmap/screenmap.json). */
-export function runCli(cwd, args) {
+/** Run `screen-map <args>` in `cwd` (with `env`, and `input` on stdin); resolves to { code, log, map }
+ *  (map: .screenmap/screenmap.json). */
+export function runCli(cwd, args, { env = process.env, input = null } = {}) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [BIN, ...args], { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [BIN, ...args], { cwd, env, stdio: [input == null ? "ignore" : "pipe", "pipe", "pipe"] });
+    if (input != null) child.stdin.end(input);
     let log = "";
     child.stdout.on("data", (d) => { log += d; });
     child.stderr.on("data", (d) => { log += d; });

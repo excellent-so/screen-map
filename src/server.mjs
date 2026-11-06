@@ -35,6 +35,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
+import { UserError } from "./errors.mjs";
 
 const HEALTH_INTERVAL_MS = 20_000;
 const HEALTH_TIMEOUT_MS = 10_000;
@@ -108,14 +109,18 @@ async function waitForReady(base, readyPath, timeoutMs, isAlive) {
  */
 export async function startManagedServer({ server, root, log = () => {} }) {
   const cfg = normalizeServer(server);
-  if (!cfg) throw new Error("managed server: no `server.command` configured");
+  if (!cfg) throw new UserError("--managed-server needs a `server` block in screen-map.config.* with at least a `command`.");
   const cwd = path.resolve(root, cfg.cwd);
   const port = cfg.port > 0 ? cfg.port : await pickPort(cfg.portBase);
   const base = `http://localhost:${port}`;
 
+  // The project's own binaries (`next`) come first, as under `npm run`, so the command works
+  // however Screen Map itself was started (npx, a global install, a package script).
+  const bins = [...new Set([path.join(cwd, "node_modules", ".bin"), path.join(root, "node_modules", ".bin")])];
   const childEnv = {
     ...process.env,
     ...cfg.env,
+    PATH: [...bins, process.env.PATH || ""].filter(Boolean).join(path.delimiter),
     PORT: String(port),
     SCREENMAP_BASE: "", // never let an inherited override redirect the child
   };
@@ -125,7 +130,8 @@ export async function startManagedServer({ server, root, log = () => {} }) {
     log(`● managed server: prepare — ${Array.isArray(cfg.prepare) ? cfg.prepare.join(" ") : cfg.prepare}`);
     const pre = Array.isArray(cfg.prepare) ? cfg.prepare : String(cfg.prepare).trim().split(/\s+/);
     const r = spawnSync(pre[0], pre.slice(1), { cwd, env: childEnv, stdio: "inherit" });
-    if (r.status !== 0) throw new Error(`managed server: prepare step failed (exit ${r.status})`);
+    if (r.error) throw new UserError(`The managed server's prepare step \`${pre.join(" ")}\` couldn't start (${r.error.code || r.error.message}). Check server.prepare in screen-map.config.*.`);
+    if (r.status !== 0) throw new UserError(`The managed server's prepare step \`${pre.join(" ")}\` failed (exit ${r.status}). Its output is above.`);
   }
 
   const argv = cfg.portFlag ? [...cfg.command.slice(1), cfg.portFlag, String(port)] : cfg.command.slice(1);
@@ -138,17 +144,32 @@ export async function startManagedServer({ server, root, log = () => {} }) {
   let stopped = false;
   let restarts = 0;
   let watchTimer = null;
+  let spawnError = null;
 
-  const spawnServer = () =>
-    spawn(cfg.command[0], argv, { cwd, detached: true, stdio: ["ignore", "inherit", "inherit"], env: childEnv });
+  const spawnServer = () => {
+    const child = spawn(cfg.command[0], argv, { cwd, detached: true, stdio: ["ignore", "inherit", "inherit"], env: childEnv });
+    child.on("error", (e) => { spawnError = e; }); // a command that isn't there: reported below, not thrown
+    return child;
+  };
   const killGroup = (sig) => { try { if (server_?.pid) process.kill(-server_.pid, sig); } catch { /* gone */ } };
-  const alive = () => Boolean(server_) && server_.exitCode === null && !server_.killed;
+  const alive = () => Boolean(server_) && !spawnError && server_.exitCode === null && server_.signalCode === null && !server_.killed;
 
   server_ = spawnServer();
+  // Hooked before the wait, so Ctrl-C during a slow first boot still stops the server.
+  process.on("exit", onExit);
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
 
   if (!(await waitForReady(base, cfg.readyPath, cfg.readyTimeoutMs, alive))) {
     await hardStop();
-    throw new Error(`managed server did not become ready on :${port} within ${cfg.readyTimeoutMs / 1000}s`);
+    const cmd = `${cfg.command[0]} ${argv.join(" ")}`.trim();
+    if (spawnError) {
+      throw new UserError(spawnError.code === "ENOENT"
+        ? `The managed server couldn't start: \`${cfg.command[0]}\` isn't installed in this project. Install it, or set server.command in screen-map.config.* to how you start your dev server.`
+        : `The managed server \`${cmd}\` couldn't start (${spawnError.code || spawnError.message}).`);
+    }
+    if (server_.exitCode !== null) throw new UserError(`The managed server \`${cmd}\` stopped (exit ${server_.exitCode}) before it answered. Its output is above.`);
+    throw new UserError(`The managed server \`${cmd}\` didn't answer at ${base}${cfg.readyPath} within ${cfg.readyTimeoutMs / 1000}s. Its output is above; or raise server.readyTimeoutMs.`);
   }
   log(`  ✓ ready at ${base}`);
 
@@ -165,11 +186,9 @@ export async function startManagedServer({ server, root, log = () => {} }) {
     log(`  ✓ torn down managed server`);
   }
 
-  const onExit = () => { if (!stopped) { stopped = true; if (watchTimer) clearInterval(watchTimer); killGroup("SIGKILL"); } };
-  const onSignal = () => { hardStop().finally(() => process.exit(130)); };
-  process.on("exit", onExit);
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
+  // Declared as functions so hardStop() can unhook them even when the server never got ready.
+  function onExit() { if (!stopped) { stopped = true; if (watchTimer) clearInterval(watchTimer); killGroup("SIGKILL"); } }
+  function onSignal() { hardStop().finally(() => process.exit(130)); }
 
   if (cfg.watchdog) {
     let consecutive = 0;

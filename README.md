@@ -25,11 +25,13 @@ npx @excellent-so/screen-map open
 
 `build` writes the map to `.screenmap/` (add that folder to `.gitignore`). `open` serves the viewer on
 http://localhost:4610, or the next free port, and opens it in your browser. If your dev server is on another
-address, pass it to `build`:
+address, pass it to `build`, and the commands after it use the same address:
 
 ```sh
 npx @excellent-so/screen-map build --base=http://localhost:3001
 ```
+
+If nothing answers at the address, `build` stops and says so before it takes a screenshot.
 
 A standard App Router app needs no config file. To keep Screen Map in the project, install it as a dev
 dependency and add a script:
@@ -77,12 +79,14 @@ and it remembers. Served by `open` or `serve`, it saves notes to `.screenmap/not
 | `screen-map init` | Write a starter `screen-map.config.mjs` |
 | `screen-map doctor` | Report the config, Chrome and output adapters it found |
 | `screen-map bug` | Report a bug in Screen Map itself, as a GitHub issue (see [Reporting a bug](#reporting-a-bug)) |
+| `screen-map help` | List every command and flag (`--help` after any command does the same) |
 
 Useful `build` flags: `--base=<url>` (your dev server), `--no-capture` (graph only, no Chrome),
 `--no-crawl` (skip the crawl), `--only=g1,g2` (only these route groups), `--concurrency=N`, `--limit=N`,
 `--crawl-capture-max=N` (see [Discovery](#discovery)), `--download-chrome` (fetch Chrome if none is
-installed), and `--managed-server` (see [Running its own dev server](#running-its-own-dev-server)).
-`screen-map help` lists them all.
+installed; see [Chrome](#chrome)), and `--managed-server` (see
+[Running its own dev server](#running-its-own-dev-server)). Any command takes `--base=<url>` and
+`--chrome=<path>`. `screen-map help` lists them all, and `screen-map --version` prints the version.
 
 ## Configuration
 
@@ -96,6 +100,10 @@ export default {
   framework: "next-app-router",        // the discovery adapter
   discovery: ["router-walk", "crawl"], // drop "crawl" to skip the crawl
   crawlCaptureMax: 100,                // screenshots of pages only the crawl finds; 0 for none
+  colorScheme: "light",                // the theme pages are captured in: "light" or "dark"
+  chrome: null,                        // a browser to use; SCREENMAP_CHROME overrides it
+  exclude: [],                         // routes to leave off the map ("/admin" drops its subtree)
+  sampleParams: {},                    // values for dynamic segments: { id: ["42"], slug: ["hello"] }
   groups: (route) => route.split("/")[1] || "root", // the board's columns
   navBackbone: [],                     // global nav targets, so nav-only pages aren't orphans
   noChromeRoots: [],                   // route roots without the global nav (auth pages)
@@ -109,7 +117,9 @@ export default {
 };
 ```
 
-The values shown are the defaults: leave a key out to keep its default.
+The values shown are the defaults: leave a key out to keep its default. Screenshots are taken in the
+light theme whatever your system uses, so a machine that turns dark at sunset doesn't show every screen as
+changed; set `colorScheme: "dark"` to capture dark.
 
 **Dynamic routes.** Screen Map fills `[id]` and `[slug]` routes with seed values, then by taking a real
 detail link from the nearest index page. When neither works (one `[id]` shared by unrelated routes, a detail
@@ -179,8 +189,9 @@ Screen Map combines two sources:
 
 - **The route walk** lists every route in the App Router folder, including routes no page links to. Only
   Next.js App Router apps have one.
-- **The crawl** loads your running app from `/` and follows its links. It sees what the app really renders,
-  works for any framework, and checks the links the walk found in source.
+- **The crawl** loads your running app from `/` and follows its links (`<a href>`, relative or not, and
+  redirects within the app). It sees what the app really renders, works for any framework, and checks the
+  links the walk found in source.
 
 A route the walk lists and the crawl never reaches is a proven orphan. On an app without an App Router
 folder there is no walk, so the map is the crawl alone: the pages reachable from `/`, each with a
@@ -204,7 +215,29 @@ screen-map route --adapter=markdown   # append to .screenmap/findings.md and pri
 screen-map route --adapter=github     # open a GitHub issue (needs GITHUB_TOKEN)
 ```
 
+`route` sends the notes you queued in the viewer (Queue for later) and moves them to With agent; a note
+you already copied for an agent, or approved, stays put. `--all` sends every note, `--note=<id>` one.
 `screen-map route --dry-run` prints the findings without sending them.
+
+The GitHub adapter opens issues on `output.github.repo` (`{ adapter: "github", github: { repo:
+"owner/name" } }`), or on the repo your `origin` remote points at. It reads the token from
+`GITHUB_TOKEN` or `GH_TOKEN`, never from the config, and checks both before it sends anything.
+
+## Chrome
+
+Screen Map screenshots with the Chrome you have installed: Google Chrome, Chromium, Edge or Brave, in their
+usual places or on your PATH. To use another, set `SCREENMAP_CHROME=/path/to/chrome` (or `chrome` in the
+config, or `--chrome=<path>`). With none installed, `build` says so and stops. `--download-chrome` fetches
+Chrome for Testing into `~/.cache/screen-map/` instead; it needs the optional `@puppeteer/browsers` package
+beside Screen Map:
+
+```sh
+npx -p @puppeteer/browsers -p @excellent-so/screen-map screen-map build --download-chrome
+# or, installed in the project:
+npm i -D @excellent-so/screen-map @puppeteer/browsers && npx screen-map build --download-chrome
+```
+
+Screen Map never bundles a browser and never runs a postinstall script.
 
 ## Editor extension
 
@@ -222,8 +255,29 @@ can paste the rest into the issue.
 
 ## What it sends
 
-Nothing leaves your machine unless you ask: `route --adapter=github` opens an issue through the GitHub API.
-`screen-map bug` sends nothing itself; the issue is filed only when you submit it on GitHub.
+Screen Map loads your dev server's pages (and headless Chrome fetches whatever those pages load, as any
+browser would). Nothing else leaves your machine unless you ask:
+`route --adapter=github` opens an issue through the GitHub API, and `build --download-chrome` downloads
+Chrome from Google's Chrome for Testing servers. `screen-map bug` sends nothing itself; the issue is filed
+only when you submit it on GitHub. There is no telemetry.
+
+## Files it writes
+
+Everything goes in `.screenmap/` in your project's root: `screenmap.json` (the map), `index.html` (the
+viewer), `shots/` (screenshots, and `shots/history/` for the versions a recapture replaced), `builds/`
+(every build's map, for `diff`), `notes.json` (your review notes), `links.json`, `findings.md` (from
+`route`) and `.chrome/` (headless Chrome's throwaway profiles). `screen-map init` writes
+`screen-map.config.mjs`. `--download-chrome` keeps its Chrome in `~/.cache/screen-map/`.
+
+## Uninstall
+
+```sh
+npm rm -D @excellent-so/screen-map   # or npm rm -g, if you installed it globally
+rm -rf .screenmap screen-map.config.mjs
+rm -rf ~/.cache/screen-map           # only if you used --download-chrome
+```
+
+`npx` keeps a copy in npm's cache; `npm cache clean --force` clears it.
 
 ## Development
 

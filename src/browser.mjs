@@ -29,8 +29,11 @@ function run(args, { timeout = 45000, maxBuffer = 64 * 1024 * 1024 } = {}) {
 
 /** The flags every Chrome run gets. The keychain and password-store flags keep Chrome from
  *  asking the OS for stored secrets: with a fresh or unusual HOME (CI, a sandbox, a new user)
- *  macOS would otherwise prompt for a keychain and the headless run hangs until it times out. */
+ *  macOS would otherwise prompt for a keychain and the headless run hangs until it times out.
+ *  The color scheme is fixed (config.colorScheme, light by default): headless Chrome otherwise
+ *  follows the OS theme, and a machine that turns dark at sunset would show every screen as changed. */
 export function baseArgs(profile) {
+  const scheme = env().config?.colorScheme === "dark" ? 0 : 1; // Blink: 0 is dark, 1 is light
   return [
     "--headless=new",
     `--user-data-dir=${path.join(paths().OUT_DIR, ".chrome", profile)}`,
@@ -42,7 +45,23 @@ export function baseArgs(profile) {
     "--disable-background-networking",
     "--use-mock-keychain",
     "--password-store=basic",
+    `--blink-settings=preferredColorScheme=${scheme}`,
   ];
+}
+
+/** True when `url` gives any HTTP answer (a 404 or a redirect counts) within `timeoutMs`. */
+export async function answers(url, timeoutMs = 60000) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, { redirect: "manual", signal: ctl.signal });
+    await r.body?.cancel().catch(() => {});
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 /** Hit the URL once so the dev server compiles the route before we render it. */

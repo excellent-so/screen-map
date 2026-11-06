@@ -31,15 +31,21 @@ export function issueBody(finding) {
   return findingMarkdown(finding) + `\n\n<sub>opened by [screen-map](${HOMEPAGE})</sub>`;
 }
 
+const NO_TOKEN = "Opening GitHub issues needs a token: set GITHUB_TOKEN (or GH_TOKEN) to a token that can write issues on the repo.";
+const NO_REPO = "Screen Map can't tell which GitHub repo to open issues on: set output.github.repo (\"owner/name\") in screen-map.config.*, or run it in a clone whose origin remote is on GitHub.";
+
+/** Why this adapter can't send yet, or null when it can. */
+export function notReady(opts = {}) {
+  if (!token()) return NO_TOKEN;
+  if (!resolveRepo(opts)) return NO_REPO;
+  return null;
+}
+
 export async function send(finding, opts = {}) {
   const tok = token();
-  if (!tok) {
-    return { ok: false, error: "no-token", message: "Set GITHUB_TOKEN (a repo-scoped token) to open GitHub issues." };
-  }
+  if (!tok) return { ok: false, error: "no-token", message: NO_TOKEN };
   const repo = resolveRepo(opts);
-  if (!repo) {
-    return { ok: false, error: "no-repo", message: "Set output.github.repo (\"owner/name\") — could not detect a GitHub origin remote." };
-  }
+  if (!repo) return { ok: false, error: "no-repo", message: NO_REPO };
   const labels = Array.isArray(opts.labels) ? opts.labels : ["screen-map", finding.intent === "fix" ? "ux" : "prototype"];
   const body = issueBody(finding);
   let res;
@@ -56,11 +62,13 @@ export async function send(finding, opts = {}) {
       body: JSON.stringify({ title: findingTitle(finding), body, labels }),
     });
   } catch (e) {
-    return { ok: false, error: "network", message: String((e && e.message) || e) };
+    return { ok: false, error: "network", message: `Couldn't reach api.github.com (${String((e && e.message) || e)}).` };
   }
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    return { ok: false, error: `http-${res.status}`, message: detail.slice(0, 300) };
+    let why = detail.slice(0, 300);
+    try { why = JSON.parse(detail).message || why; } catch { /* not JSON */ }
+    return { ok: false, error: `http-${res.status}`, message: `GitHub answered ${res.status} for ${repo}${why ? `: ${why}` : ""}.` };
   }
   const json = await res.json().catch(() => ({}));
   return { ok: true, ref: `#${json.number}`, url: json.html_url };

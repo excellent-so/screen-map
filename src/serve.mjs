@@ -130,15 +130,23 @@ export function serve({ port = 4610, open = false } = {}) {
   const onListen = () => {
     console.log(`\n  Screen Map → http://localhost:${active}\n  (notes save straight to .screenmap/notes.json · Ctrl-C to stop)\n`);
     if (open) {
-      const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-      execFile(opener, [`http://localhost:${active}`], () => {});
+      // `start` is a cmd.exe builtin, not a program, so Windows goes through cmd. A missing opener
+      // (a server with no desktop) leaves the URL above to open by hand.
+      const url = `http://localhost:${active}`;
+      const [opener, args] = process.platform === "darwin" ? ["open", [url]]
+        : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]]
+          : ["xdg-open", [url]];
+      execFile(opener, args, () => {});
     }
   };
+  // One "listening" handler, whatever the retries: a callback per listen() call would all fire
+  // on the port that worked, printing the URL (and opening the browser) once per busy port.
+  server.once("listening", onListen);
   server.on("error", (e) => {
-    if (e.code === "EADDRINUSE" && active < port + 25) { active++; server.listen(active, onListen); return; }
-    console.error(e.code === "EADDRINUSE" ? `\nNo free port found near ${port}.\n` : `server error: ${e.message}`);
+    if (e.code === "EADDRINUSE" && active < port + 25) { active++; server.listen(active); return; }
+    console.error(e.code === "EADDRINUSE" ? `No free port from ${port} to ${port + 25}. Stop another viewer, or pass --port=<n>.` : `The viewer couldn't start on port ${active}: ${e.message}`);
     process.exit(1);
   });
-  server.listen(active, onListen);
+  server.listen(active);
   return server;
 }

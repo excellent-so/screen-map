@@ -8,6 +8,11 @@
 // from Open VSX.
 
 const vscode = require("vscode");
+const { chain, waitForViewer } = require("./commands");
+
+const DEFAULT_COMMAND = "npx --yes @excellent-so/screen-map";
+const BUILD_TERMINAL = "Screen Map";
+const SERVE_TERMINAL = "Screen Map — viewer";
 
 function workspaceRoot() {
   const folders = vscode.workspace.workspaceFolders;
@@ -16,16 +21,23 @@ function workspaceRoot() {
 
 function cfg() {
   const c = vscode.workspace.getConfiguration("screenMap");
-  return { command: c.get("command", "npx --yes @excellent-so/screen-map"), port: c.get("port", 4699) };
+  return { command: c.get("command", DEFAULT_COMMAND), port: c.get("port", 4699) };
 }
 
-/** Run a screen-map subcommand in a reused integrated terminal. */
-function runInTerminal(name, args, cwd) {
+/** Run a line in a reused integrated terminal. */
+function runInTerminal(name, line, cwd) {
   const existing = vscode.window.terminals.find((t) => t.name === name);
   const term = existing || vscode.window.createTerminal({ name, cwd });
   term.show(true);
-  const { command } = cfg();
-  term.sendText(`${command} ${args}`);
+  term.sendText(line);
+  return term;
+}
+
+/** A fresh terminal for the viewer: closing the old one stops a viewer it was still serving. */
+function freshTerminal(name, cwd) {
+  for (const t of vscode.window.terminals) if (t.name === name) t.dispose();
+  const term = vscode.window.createTerminal({ name, cwd });
+  term.show(true);
   return term;
 }
 
@@ -39,6 +51,28 @@ async function openViewer(port) {
   }
 }
 
+/**
+ * Send `line` (which ends by serving the viewer on `port`) to a fresh viewer terminal, and open
+ * the viewer once it answers. A build can take minutes, so this waits for the server rather than
+ * a fixed delay, and says so if the viewer never comes up.
+ */
+async function serveThenOpen(r, line, port, title, timeoutMs) {
+  const term = freshTerminal(SERVE_TERMINAL, r);
+  let closed = false;
+  const sub = vscode.window.onDidCloseTerminal((t) => { if (t === term) closed = true; });
+  term.sendText(line);
+  try {
+    const up = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title, cancellable: true },
+      (_p, cancel) => waitForViewer(port, { timeoutMs, stop: () => closed || cancel.isCancellationRequested }),
+    );
+    if (up) await openViewer(port);
+    else if (!closed) vscode.window.showWarningMessage(`Screen Map: the viewer isn't answering on port ${port}. The "${SERVE_TERMINAL}" terminal says why.`);
+  } finally {
+    sub.dispose();
+  }
+}
+
 function activate(context) {
   const root = () => {
     const r = workspaceRoot();
@@ -49,32 +83,27 @@ function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand("screenMap.build", () => {
       const r = root(); if (!r) return;
-      runInTerminal("Screen Map", "build", r);
+      runInTerminal(BUILD_TERMINAL, `${cfg().command} build`, r);
     }),
 
     vscode.commands.registerCommand("screenMap.serve", async () => {
       const r = root(); if (!r) return;
-      const { port } = cfg();
-      runInTerminal("Screen Map — serve", `serve --port=${port}`, r);
-      // Give the server a moment to bind before pointing the browser at it.
-      await new Promise((res) => setTimeout(res, 1800));
-      await openViewer(port);
+      const { command, port } = cfg();
+      await serveThenOpen(r, `${command} serve --port=${port}`, port, "Screen Map: starting the viewer…", 2 * 60 * 1000);
     }),
 
     vscode.commands.registerCommand("screenMap.open", async () => {
       const r = root(); if (!r) return;
-      const { port } = cfg();
-      // Build, then serve + open. The serve terminal is separate so build output is
-      // readable and the server keeps running after the build exits.
-      runInTerminal("Screen Map", "build", r);
-      runInTerminal("Screen Map — serve", `serve --port=${port}`, r);
-      await new Promise((res) => setTimeout(res, 2500));
-      await openViewer(port);
+      const { command, port } = cfg();
+      // Build, then serve, in one terminal: the viewer starts only once the map exists, and
+      // opens when it answers.
+      const line = chain(vscode.env.shell, `${command} build`, `${command} serve --port=${port}`);
+      await serveThenOpen(r, line, port, "Screen Map: building the map. The viewer opens when it's ready.", 30 * 60 * 1000);
     }),
 
     vscode.commands.registerCommand("screenMap.doctor", () => {
       const r = root(); if (!r) return;
-      runInTerminal("Screen Map", "doctor", r);
+      runInTerminal(BUILD_TERMINAL, `${cfg().command} doctor`, r);
     }),
   );
 }
