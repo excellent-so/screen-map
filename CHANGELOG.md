@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- The viewer and its styleguide embed Geist and Geist Mono (`sync --fonts`), so they look the same on every
+  machine, with no outside requests. The viewer file grows by about 190 KB.
 - Pages the crawl reaches now get screenshots, taken the same way as the routes the walk finds, and sit on
   the board in their path's group. That covers every page of an app that isn't a Next.js App Router app, and
   the pages a Next app serves outside `app/` (a Pages Router page, a rewrite). They are never orphans. A URL

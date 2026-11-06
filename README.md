@@ -236,8 +236,10 @@ npm run styleguide        # copy the viewer's CSS into viewer/styleguide.html
 ```
 
 The viewer is one file, `viewer/index.html`. Its tokens and components come from `@excellent-so/kit`, written
-between the `excellent-kit` markers in its `<style>` by the kit's `sync` command; Screen Map's own parts
-follow between the `screen-map` markers. `viewer/styleguide.html` shows those parts.
+between the `excellent-kit` markers in its `<style>` by the kit's `sync` command
+(`npx @excellent-so/kit sync viewer/index.html viewer/styleguide.html --fonts`, which embeds Geist and Geist
+Mono so the viewer looks the same on every machine). Screen Map's own parts follow between the `screen-map`
+markers. `viewer/styleguide.html` shows those parts.
 
 ## License
 
