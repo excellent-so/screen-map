@@ -5,6 +5,8 @@
 One command screenshots every route of your running app, graphs how the routes link to each other, and
 finds the orphan pages nothing links to. It runs on your machine and has no runtime dependencies.
 
+Docs and how to use it: https://playbook.excellent.so/screen-map-cli
+
 ![The Screen Map board: a column per route group and a screenshot per route, with counts of orphans and dead ends across the top](docs/screenshot.png)
 
 **What works where.** Route discovery and orphan finding work for Next.js App Router apps: Screen Map
